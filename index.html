@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LLM Tool Recommender</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+      @keyframes text {
+        0%, 100% {
+          background-size: 200% 200%;
+          background-position: left center;
+        }
+        50% {
+          background-size: 200% 200%;
+          background-position: right center;
+        }
+      }
+      .animate-text {
+        animation: text 5s ease infinite;
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react/": "https://esm.sh/react@^19.1.0/",
+    "react": "https://esm.sh/react@^19.1.0",
+    "@google/genai": "https://esm.sh/@google/genai@^1.11.0",
+    "@huggingface/transformers": "https://esm.sh/@huggingface/transformers@^3.0.0-alpha.12",
+    "react-dom/": "https://esm.sh/react-dom@^19.1.0/",
+    "fs/": "https://esm.sh/fs@^0.0.1-security/",
+    "path": "https://esm.sh/path@^0.12.7",
+    "express": "https://esm.sh/express@^5.1.0",
+    "cors": "https://esm.sh/cors@^2.8.5",
+    "url": "https://esm.sh/url@^0.11.4",
+    "child_process": "https://esm.sh/child_process@^1.0.2",
+    "multer": "https://esm.sh/multer@^2.0.2",
+    "three": "https://esm.sh/three@^0.166.1",
+    "three/addons/": "https://esm.sh/three@^0.166.1/examples/jsm/",
+    "three/addons/loaders/SVGLoader.js": "https://esm.sh/three@^0.166.1/examples/jsm/loaders/SVGLoader.js",
+    "@dimforge/rapier3d-compat": "https://cdn.skypack.dev/@dimforge/rapier3d-compat",
+    "lil-gui": "https://esm.sh/lil-gui@^0.19.1",
+    "idb": "https://esm.sh/idb@^8",
+    "@wllama/wllama": "https://cdn.jsdelivr.net/npm/@wllama/wllama@2.3.4/esm/index.js",
+    "vite": "https://aistudiocdn.com/vite@^7.1.4"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body class="bg-gray-900">
+    <div id="root"></div>
+    <script>
+      // Define a global promise for Rapier initialization to prevent race conditions.
+      window.rapierInitializationPromise = null;
+    </script>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>

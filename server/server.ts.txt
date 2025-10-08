@@ -1,0 +1,339 @@
+// server/server.ts
+import express from 'express';
+import cors from 'cors';
+import fs from 'fs/promises';
+import path from 'path';
+import { spawn, ChildProcess } from 'child_process';
+import { createServer, type Server } from 'net';
+import type { LLMTool, NewToolPayload, AIToolCall } from '../types';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const app = express();
+const PORT = 3001;
+const TOOLS_DB_PATH = path.join(__dirname, 'tools.json');
+const SCRIPTS_DIR = path.join(__dirname, 'scripts');
+const ASSETS_DIR = path.join(__dirname, 'assets');
+
+let serverToolsCache: LLMTool[] = [];
+const MAX_LOGS = 200;
+
+const managedProcesses: Map<string, { process: ChildProcess; logs: string[]; scriptPath: string; port: number | null; type: 'node' | 'python' }> = new Map();
+const PYTHON_SERVICE_PORTS: Record<string, number> = {
+  'gazebo_service': 8002,
+};
+
+app.use(cors());
+app.use(express.json());
+app.use('/scripts', express.static(SCRIPTS_DIR));
+app.use('/assets', express.static(ASSETS_DIR));
+
+const readToolsAndLoadCache = async (): Promise<LLMTool[]> => {
+    try {
+        await fs.access(TOOLS_DB_PATH);
+        const data = await fs.readFile(TOOLS_DB_PATH, 'utf-8');
+        serverToolsCache = JSON.parse(data) as LLMTool[];
+        console.log(`[INFO] Loaded ${serverToolsCache.length} tools into server cache.`);
+        return serverToolsCache;
+    } catch (error) {
+        serverToolsCache = [];
+        console.log('[INFO] tools.json not found or empty. Initializing with 0 server tools.');
+        return [];
+    }
+};
+
+const writeTools = async (tools: LLMTool[]): Promise<void> => {
+    await fs.writeFile(TOOLS_DB_PATH, JSON.stringify(tools, null, 2));
+};
+
+const generateMachineReadableId = (name: string, existingTools: LLMTool[]): string => {
+  let baseId = name.trim().toLowerCase().replace(/[^a-z0-9\s_]/g, '').replace(/\s+/g, '_').slice(0, 50);
+  if (!baseId) baseId = 'unnamed_tool';
+  let finalId = baseId;
+  let counter = 1;
+  const existingIds = new Set(existingTools.map(t => t.id));
+  while (existingIds.has(finalId)) {
+    finalId = `${baseId}_${counter}`;
+    counter++;
+  }
+  return finalId;
+};
+
+const addLog = (logArray: string[], log: string) => {
+    logArray.push(log);
+    if (logArray.length > MAX_LOGS) {
+        logArray.shift();
+    }
+};
+
+const isPortFree = (port: number): Promise<boolean> => {
+    return new Promise((resolve) => {
+        const server: Server = createServer();
+        server.once('error', (err: any) => { resolve(err.code !== 'EADDRINUSE'); });
+        server.once('listening', () => { server.close(() => resolve(true)); });
+        server.listen(port, '127.0.0.1');
+    });
+};
+
+const findFreePort = async (startPort: number): Promise<number> => {
+    let port = startPort;
+    while (!(await isPortFree(port))) {
+        port++;
+    }
+    return port;
+};
+
+const isPythonServiceHealthy = async (port: number): Promise<boolean> => {
+    try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 1000);
+        const response = await fetch(`http://127.0.0.1:${port}/health`, { method: 'GET', signal: controller.signal });
+        clearTimeout(timeoutId);
+        return response.ok;
+    } catch (error) {
+        return false;
+    }
+};
+
+const ensurePythonServiceIsReady = async (processId: string, scriptPath: string): Promise<{ success: boolean; message: string; port?: number; error?: string }> => {
+    const existingProcess = managedProcesses.get(processId);
+    if (existingProcess && !existingProcess.process.killed && existingProcess.port && await isPythonServiceHealthy(existingProcess.port)) {
+        return { success: true, message: `Python Service '${processId}' is healthy on port ${existingProcess.port}.`, port: existingProcess.port };
+    }
+    
+    if (existingProcess && !existingProcess.process.killed) {
+        console.warn(`[WARN] Killing previous (likely unresponsive) service process for '${processId}'...`);
+        existingProcess.process.kill('SIGKILL');
+    }
+
+    try {
+        const startPort = PYTHON_SERVICE_PORTS[processId] || 8003;
+        const port = await findFreePort(startPort);
+        const newLogs: string[] = [];
+        addLog(newLogs, `[MCP] Starting Python process '${processId}' on port ${port}...`);
+        
+        const pythonExecutable = path.join(__dirname, '..', 'venv', 'bin', 'python');
+        const fullScriptPath = path.join(SCRIPTS_DIR, scriptPath);
+        
+        const newProcess = spawn(pythonExecutable, [fullScriptPath], {
+            cwd: SCRIPTS_DIR,
+            env: { ...process.env, PORT: port.toString() }
+        });
+
+        managedProcesses.set(processId, { process: newProcess, logs: newLogs, scriptPath, port, type: 'python' });
+
+        newProcess.stdout?.on('data', (data) => addLog(newLogs, data.toString().trim()));
+        newProcess.stderr?.on('data', (data) => addLog(newLogs, `[ERR] ${data.toString().trim()}`));
+        newProcess.on('close', (code) => {
+            const pInfo = managedProcesses.get(processId);
+            if (pInfo) addLog(pInfo.logs, `[MCP] Process '${processId}' exited with code ${code}.`);
+        });
+        newProcess.on('error', (err) => { addLog(newLogs, `[MCP FATAL] Failed to start '${processId}': ${err.message}`); });
+
+        const startTime = Date.now();
+        const timeout = 15000;
+        while (Date.now() - startTime < timeout) {
+            if (await isPythonServiceHealthy(port)) {
+                console.log(`[INFO] New service '${processId}' is now healthy on port ${port}.`);
+                return { success: true, message: `Service '${processId}' started successfully on port ${port}.`, port };
+            }
+            if (newProcess.killed || newProcess.exitCode !== null) {
+                 throw new Error(`Service process for '${processId}' exited prematurely during startup.`);
+            }
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        throw new Error(`Service '${processId}' failed to become healthy on port ${port} within ${timeout / 1000} seconds.`);
+    } catch (e) {
+        const err = e as Error;
+        const pInfo = managedProcesses.get(processId);
+        if (pInfo) {
+            addLog(pInfo.logs, `[MCP] Startup failed: ${err.message}`);
+            if (!pInfo.process.killed) pInfo.process.kill('SIGKILL');
+        }
+        return { success: false, message: `Failed to start service '${processId}': ${err.message}`, error: err.message };
+    }
+};
+
+app.get('/api/tools', (req, res) => res.json(serverToolsCache));
+
+app.post('/api/tools/create', async (req, res) => {
+    try {
+        const payload: NewToolPayload = req.body;
+        if (!payload.name || !payload.description || !payload.category || !payload.implementationCode) {
+            return res.status(400).json({ error: 'Missing required tool properties.' });
+        }
+        if (payload.category !== 'Server') {
+            return res.status(400).json({ error: "Tools created on the server must have the category 'Server'." });
+        }
+        
+        const currentTools = [...serverToolsCache];
+        const existingToolIndex = currentTools.findIndex(t => t.name === payload.name);
+
+        if (existingToolIndex !== -1) {
+            const existingTool = currentTools[existingToolIndex];
+            const updatedTool = { ...existingTool, ...payload, version: existingTool.version + 1, updatedAt: new Date().toISOString() };
+            currentTools[existingToolIndex] = updatedTool;
+            await writeTools(currentTools);
+            serverToolsCache = currentTools;
+            return res.status(200).json({ message: `Server tool '${payload.name}' updated successfully.`, tool: updatedTool });
+        } else {
+            const newTool: LLMTool = { ...payload, id: generateMachineReadableId(payload.name, currentTools), version: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), executionEnvironment: 'Server' };
+            currentTools.push(newTool);
+            await writeTools(currentTools);
+            serverToolsCache = currentTools;
+            return res.status(201).json({ message: 'Server tool created successfully', tool: newTool });
+        }
+    } catch (error) {
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+});
+
+app.post('/api/execute', async (req, res) => {
+    const { name, arguments: args }: AIToolCall = req.body;
+    if (!name) return res.status(400).json({ error: 'Tool name is required.' });
+    
+    const toolToExecute = serverToolsCache.find(t => t.name === name);
+    if (!toolToExecute) return res.status(404).json({ error: `Server-side tool '${name}' not found in the live registry.` });
+    
+    const proxyMatch = String(toolToExecute.implementationCode).trim().match(/^([a-zA-Z0-9_]+)_proxy::(.+)$/);
+    if (proxyMatch) {
+        const serviceName = proxyMatch[1];
+        const commandName = proxyMatch[2];
+        const scriptPath = `${serviceName}.py`;
+        
+        const startResult = await ensurePythonServiceIsReady(serviceName, scriptPath);
+        if (!startResult.success || !startResult.port) {
+            return res.status(500).json({ error: `Failed to start or connect to the required service '${serviceName}': ${startResult.error}` });
+        }
+        
+        try {
+            const serviceResponse = await fetch(`http://127.0.0.1:${startResult.port}/command/${commandName}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                body: JSON.stringify(args || {}),
+                signal: AbortSignal.timeout(600000) // 10 minute timeout
+            });
+
+            const contentType = serviceResponse.headers.get("content-type");
+            if (!contentType || !contentType.includes("application/json")) {
+                const textResponse = await serviceResponse.text();
+                const errorMessage = `The '${serviceName}' service returned a non-JSON response (status ${serviceResponse.status}). This often indicates a server-side crash. Response: ${textResponse.substring(0, 500)}`;
+                 const pInfo = managedProcesses.get(serviceName);
+                if (pInfo) addLog(pInfo.logs, `[MCP] Non-JSON response received: ${textResponse}`);
+                return res.status(502).json({ error: errorMessage });
+            }
+
+            const result = await serviceResponse.json();
+            if (!serviceResponse.ok) {
+                const detail = result.detail || { error: 'Unknown error from Python service' };
+                const errorMessage = typeof detail === 'string' ? detail : (detail.error || JSON.stringify(detail));
+                return res.status(serviceResponse.status).json({ error: errorMessage });
+            }
+            
+            return res.json({ success: true, ...result });
+        } catch (fetchError) {
+            const err = fetchError as Error;
+            return res.status(502).json({ error: `Could not connect to the '${serviceName}' service. It may have crashed. Details: ${err.message}` });
+        }
+    }
+
+    try {
+        switch (toolToExecute.implementationCode) {
+            case 'start_node_process': {
+                const { processId, scriptPath } = args;
+                if (!processId || !scriptPath) return res.status(400).json({ error: 'processId and scriptPath are required.' });
+                if (managedProcesses.has(processId) && !managedProcesses.get(processId)!.process.killed) {
+                    return res.status(400).json({ error: `Process with ID '${processId}' is already running.`});
+                }
+                
+                const fullScriptPath = path.join(SCRIPTS_DIR, scriptPath.replace(/^scripts\//, ''));
+                if (!fullScriptPath.startsWith(SCRIPTS_DIR)) return res.status(400).json({ error: "Invalid script path." });
+                await fs.access(fullScriptPath);
+
+                const port = await findFreePort(4001);
+                const newLogs: string[] = [];
+                addLog(newLogs, `[MCP] Starting process '${processId}' on port ${port}...`);
+                const newProcess = spawn('node', ['--loader', 'ts-node/esm', fullScriptPath], { 
+                    cwd: __dirname,
+                    env: { ...process.env, PORT: port.toString(), SHARD_ID: processId }
+                });
+
+                managedProcesses.set(processId, { process: newProcess, logs: newLogs, scriptPath, port, type: 'node' });
+
+                newProcess.stdout?.on('data', (data) => addLog(newLogs, `[${processId}] ${data.toString().trim()}`));
+                newProcess.stderr?.on('data', (data) => addLog(newLogs, `[${processId} ERR] ${data.toString().trim()}`));
+                newProcess.on('close', (code) => {
+                     const pInfo = managedProcesses.get(processId);
+                     if (pInfo) addLog(pInfo.logs, `[MCP] Process '${processId}' exited with code ${code}.`);
+                });
+                newProcess.on('error', (err) => { addLog(newLogs, `[MCP FATAL] Failed to start '${processId}': ${err.message}`); });
+                
+                return res.json({ success: true, message: `Process '${processId}' started on port ${port}.`, processId, port });
+            }
+            case 'start_python_process': {
+                const { processId, scriptPath } = args;
+                if (!processId || !scriptPath) return res.status(400).json({ error: 'processId and scriptPath are required.' });
+                
+                const result = await ensurePythonServiceIsReady(processId, scriptPath);
+                if (result.success) {
+                    return res.json({ success: true, message: result.message, processId, port: result.port });
+                } else {
+                    return res.status(500).json({ error: result.error });
+                }
+            }
+            case 'stop_process': {
+                const { processId } = args;
+                const p_info = managedProcesses.get(processId);
+                if (!p_info || p_info.process.killed) return res.status(404).json({ error: `Process with ID '${processId}' not found or already stopped.`});
+                p_info.process.kill('SIGTERM');
+                return res.json({ success: true, message: `Stop signal sent to process '${processId}'.` });
+            }
+            case 'list_managed_processes': {
+                const processList = Array.from(managedProcesses.entries()).map(([id, p_info]) => ({
+                    processId: id, scriptPath: p_info.scriptPath, 
+                    isRunning: p_info.process.pid !== null && p_info.process.exitCode === null && !p_info.process.killed,
+                    pid: p_info.process.pid, port: p_info.port, logs: p_info.logs, type: p_info.type,
+                }));
+                return res.json({ success: true, processes: processList });
+            }
+        }
+    } catch(e) {
+        const errorMessage = e instanceof Error ? e.message : 'Unknown error during built-in command execution.';
+        return res.status(500).json({ error: errorMessage });
+    }
+    
+    res.status(501).json({ error: `Execution for tool '${name}' with implementation '${toolToExecute.implementationCode}' is not implemented on the server.` });
+});
+
+app.post('/api/files/write', async (req, res) => {
+    try {
+        const { filePath, content, baseDir } = req.body;
+        if (!filePath || typeof content !== 'string') {
+            return res.status(400).json({ error: "Missing 'filePath' or 'content'." });
+        }
+        const targetBaseDir = (baseDir === 'assets') ? ASSETS_DIR : SCRIPTS_DIR;
+        const safeFileName = path.normalize(filePath).replace(/^(\.\.(\/|\\|$))+/, '');
+        if (safeFileName.includes('..')) {
+           return res.status(400).json({ error: "Invalid file path (directory traversal detected)." });
+        }
+        const fullPath = path.join(targetBaseDir, safeFileName);
+        if (!fullPath.startsWith(targetBaseDir)) {
+            return res.status(400).json({ error: `Invalid file path (resolved outside '${baseDir || 'scripts'}' directory).` });
+        }
+        await fs.mkdir(path.dirname(fullPath), { recursive: true });
+        await fs.writeFile(fullPath, content);
+        res.status(201).json({ success: true, message: `File '${safeFileName}' written successfully to '${baseDir || 'scripts'}' directory.` });
+    } catch (error) {
+        res.status(500).json({ error: 'Internal Server Error while writing file.' });
+    }
+});
+
+app.listen(PORT, async () => {
+    console.log(`Singularity Agent Factory Backend Server listening on http://localhost:${PORT}`);
+    await fs.mkdir(SCRIPTS_DIR, { recursive: true });
+    await fs.mkdir(ASSETS_DIR, { recursive: true });
+    await readToolsAndLoadCache();
+    console.warn('SECURITY WARNING: This server can execute arbitrary code. Do not expose it to the internet.');
+});
