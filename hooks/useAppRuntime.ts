@@ -74,7 +74,8 @@ export const useAppRuntime = () => {
             },
             search: (text: string) => {
                  stateManager.setApiCallCount(prev => ({ ...prev, [stateManager.selectedModel.id]: (prev[stateManager.selectedModel.id] || 0) + 1 }));
-                 return aiService.contextualizeWithSearch({text, files: []}, stateManager.apiConfig);
+                 // FIX: Added the missing `stateManager.selectedModel` argument to the `contextualizeWithSearch` call.
+                 return aiService.contextualizeWithSearch({text, files: []}, stateManager.apiConfig, stateManager.selectedModel);
             }
         },
         getObservationHistory: () => [], // Placeholder for a more advanced feature

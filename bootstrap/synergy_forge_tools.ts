@@ -114,4 +114,33 @@ export const SYNERGY_FORGE_FUNCTIONAL_TOOLS: ToolCreatorPayload[] = [
             };
         `
     },
+    {
+        name: 'RecordTrialDossier',
+        description: 'Records a complete, trial-ready dossier for a specific combination, intended for business and investment review.',
+        category: 'Functional',
+        executionEnvironment: 'Client',
+        purpose: 'To capture the structured output of the "Business Analyst" agent, turning research findings into an actionable investment proposal.',
+        parameters: [
+            { name: 'combination', type: 'array', description: 'The array of intervention names.', required: true },
+            { name: 'executiveSummary', type: 'string', description: 'A high-level summary for investors.', required: true },
+            { name: 'scientificRationale', type: 'string', description: 'Detailed explanation of the biological mechanism and synergy.', required: true },
+            { name: 'inSilicoValidation', type: 'string', description: 'The results from the SynergyForge simulation, presented as evidence. E.g., "Predicted healthspan increase of 45% (p<0.001, n=1000) across 3 of 4 aging models."', required: true },
+            { name: 'marketAndIP', type: 'string', description: 'Analysis of the market opportunity and potential for intellectual property.', required: true },
+            { name: 'roadmap', type: 'string', description: 'Proposed next steps, e.g., preclinical animal studies.', required: true },
+            { name: 'risks', type: 'string', description: 'An analysis of known risks and potential side effects.', required: true },
+        ],
+        implementationCode: `
+            const { ...dossierData } = args;
+            runtime.logEvent(\`[Dossier] Recording investment proposal for: \${dossierData.combination.join(' + ')}\`);
+
+            if (!dossierData.combination || dossierData.combination.length === 0) {
+                throw new Error("A combination of interventions is required for a dossier.");
+            }
+
+            return {
+                success: true,
+                dossier: dossierData,
+            };
+        `
+    },
 ];

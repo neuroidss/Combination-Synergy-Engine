@@ -2,6 +2,7 @@ import React from 'react';
 import { useAppRuntime } from './hooks/useAppRuntime';
 import UIToolRunner from './components/UIToolRunner';
 import type { LLMTool } from './types';
+import { AI_MODELS } from './constants';
 
 const App: React.FC = () => {
     const appRuntime = useAppRuntime();
@@ -28,6 +29,11 @@ const App: React.FC = () => {
                         startSwarmTask: appRuntime.startSwarmTask,
                         lastSwarmRunHistory: appRuntime.lastSwarmRunHistory,
                         eventLog: appRuntime.eventLog,
+                        availableModels: AI_MODELS,
+                        selectedModel: appRuntime.selectedModel,
+                        setSelectedModel: appRuntime.setSelectedModel,
+                        apiConfig: appRuntime.apiConfig,
+                        setApiConfig: appRuntime.setApiConfig,
                     }} 
                 />
             ) : (

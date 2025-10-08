@@ -72,10 +72,15 @@ export const generateTextFromModel = async (
 
 export const contextualizeWithSearch = async (
     prompt: { text: string; files: any[] },
-    apiConfig: APIConfig
+    apiConfig: APIConfig,
+    model: AIModel
 ): Promise<{ summary: string; sources: { title: string; uri: string }[] }> => {
     // Currently, only Gemini is configured for this specific search-grounded generation.
-    return geminiService.contextualizeWithSearch(prompt, apiConfig);
+    if (model.provider !== ModelProvider.GoogleAI) {
+        console.warn(`Web search is only available for GoogleAI models. The selected model is ${model.provider}. Skipping search.`);
+        return { summary: '', sources: [] };
+    }
+    return geminiService.contextualizeWithSearch(prompt, apiConfig, model.id);
 };
 
 

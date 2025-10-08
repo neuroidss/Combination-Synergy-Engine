@@ -1,4 +1,4 @@
-import { LLMTool } from './types';
+import { LLMTool, APIConfig } from './types';
 
 const STORAGE_KEY = 'singularity-agent-factory-state';
 const CURRENT_STORAGE_VERSION = 6; // Incremented for simplified state
@@ -6,6 +6,7 @@ const CURRENT_STORAGE_VERSION = 6; // Incremented for simplified state
 export interface AppState {
     version: number;
     tools: LLMTool[];
+    apiConfig?: APIConfig;
 }
 
 export const loadStateFromStorage = (): AppState | null => {
@@ -28,10 +29,12 @@ export const loadStateFromStorage = (): AppState | null => {
     return null;
 };
 
-export const saveStateToStorage = (state: Omit<AppState, 'version'>) => {
+export const saveStateToStorage = (partialState: Partial<Omit<AppState, 'version'>>) => {
     try {
+        const currentState = loadStateFromStorage() || { version: CURRENT_STORAGE_VERSION, tools: [] };
         const stateToSave: AppState = {
-            ...state,
+            ...currentState,
+            ...partialState,
             version: CURRENT_STORAGE_VERSION,
         };
         localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave));

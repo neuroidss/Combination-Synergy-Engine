@@ -1,5 +1,7 @@
 # SynergyForge: The Longevity Combination Engine & Organoid Simulator
 
+**Live Demo:** [https://neuroidss.github.io/Combination-Synergy-Engine/](https://neuroidss.github.io/Combination-Synergy-Engine/)
+
 This project is a browser-first platform for an **AI agent capable of autonomous bioinformatics research**, which powers an educational organoid simulation game.
 
 The application is built on a modular architecture where an agent can build its own tools to achieve its goals. The core of the system is a scientific validation engine that ensures all data is derived from reliable, primary sources.

@@ -145,14 +145,15 @@ export const generateText = async (
 
 export const contextualizeWithSearch = async (
     prompt: { text: string; files: any[] },
-    apiConfig: APIConfig
+    apiConfig: APIConfig,
+    modelId: string
 ): Promise<{ summary: string; sources: { title: string; uri: string }[] }> => {
     const apiKey = apiConfig.googleAIAPIKey;
     if (!apiKey) throw new Error("Google AI API Key is missing for search.");
 
     const ai = getGeminiInstance(apiKey);
     const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: modelId,
         contents: prompt.text,
         config: {
             tools: [{ googleSearch: {} }],
