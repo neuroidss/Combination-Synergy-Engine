@@ -1,4 +1,5 @@
 
+
 import type { ToolCreatorPayload } from '../types';
 
 export const SYNERGY_FORGE_TOOLS: ToolCreatorPayload[] = [{
@@ -79,6 +80,7 @@ const interventionEffects = React.useRef({
 const [researchHistory, setResearchHistory] = React.useState([]);
 const [synergies, setSynergies] = React.useState([]);
 const [dossiers, setDossiers] = React.useState([]);
+const [critiques, setCritiques] = React.useState([]);
 // FIX: Renamed 'prompt' to 'taskPrompt' to avoid conflict with the window.prompt function.
 const [taskPrompt, setTaskPrompt] = React.useState('Discover a broad range of longevity interventions (e.g., drugs, supplements, lifestyle changes) and analyze them to find both known and novel synergistic combinations.');
 const [currentTab, setCurrentTab] = React.useState('sources');
@@ -233,11 +235,13 @@ React.useEffect(() => {
         });
         const finalSynergies = synergiesData.map(syn => ({ ...syn, gameParameters: gameParamsMap.get(syn.combination.join(' + ')) || null }));
         const finalDossiers = history.filter(h => h.tool?.name === 'RecordTrialDossier').map(h => h.executionResult.dossier);
+        const finalCritiques = history.filter(h => h.tool?.name === 'RecordCritique' && h.executionResult?.critique).map(h => h.executionResult.critique);
 
         // Since the start handlers clear state, we just populate the new results here.
         setResearchHistory(sources);
         setSynergies(finalSynergies);
         setDossiers(finalDossiers);
+        setCritiques(finalCritiques);
 
         // Switch to the most relevant tab to show the user what was generated.
         if (finalDossiers.length > 0) {
@@ -258,6 +262,7 @@ React.useEffect(() => {
         const lastLog = eventLog[eventLog.length - 1] || '';
         let status = 'Agent is working...';
         if (lastLog.includes('Generating investment dossiers')) status = 'Stage 6: Generating investment dossiers...';
+        else if (lastLog.includes('critical review')) status = 'Stage 7: Critically reviewing proposals...';
         else if (lastLog.includes('Verifying sources') || lastLog.includes('Enrichment complete')) status = 'Stage 2: Verifying sources...';
         else if (lastLog.includes('Recording synergy:')) status = 'Stage 3: Identifying synergies...';
         else if (lastLog.includes('Recording parameters for:')) status = 'Stage 4: Generating game parameters...';
@@ -274,16 +279,9 @@ const handleStart = () => {
         setResearchHistory([]);
         setSynergies([]);
         setDossiers([]);
+        setCritiques([]);
         startSwarmTask({ task: taskPrompt, systemPrompt: null, allTools: runtime.tools.list() });
     }
-};
-
-const handleStartProposalGeneration = () => {
-    const proposalTaskPrompt = 'Perform a full end-to-end analysis. First, discover and validate a broad range of longevity interventions from scientific literature. Second, analyze the validated findings to identify both known and novel synergistic combinations. Finally, based on this comprehensive research, identify the top 2-3 most promising combinations and generate a thorough "Trial-Ready Combination Dossier" for each by calling the appropriate tool. The entire process should be autonomous.';
-    setResearchHistory([]);
-    setSynergies([]);
-    setDossiers([]);
-    startSwarmTask({ task: proposalTaskPrompt, systemPrompt: null, allTools: runtime.tools.list() });
 };
 
 const applySynergy = (synergy) => {
@@ -424,6 +422,12 @@ const SynergyCard = ({synergy}) => {
             </div>
             <p className="text-sm font-semibold text-slate-400 mb-2">{synergy.synergyType}</p>
             <p className="text-sm text-slate-300 flex-grow">{synergy.summary}</p>
+            {synergy.potentialRisks && (
+                <div className="mt-3 bg-red-900/30 p-2 rounded-md border border-red-700/50">
+                    <h5 className="text-xs font-bold text-yellow-300 uppercase tracking-wider">Potential Risks</h5>
+                    <p className="text-sm text-yellow-200">{synergy.potentialRisks}</p>
+                </div>
+            )}
             <button onClick={() => applySynergy(synergy)} disabled={!anyOrganoidAlive || !synergy.gameParameters} className={\`mt-4 font-bold py-1.5 px-3 rounded-lg self-start transition-colors \${isHypothesized ? 'bg-purple-600 hover:bg-purple-500' : 'bg-emerald-600 hover:bg-emerald-500'} disabled:bg-slate-600 disabled:cursor-not-allowed\`}>
                 {synergy.gameParameters ? 'Apply to Organoids' : 'No Parameters'}
             </button>
@@ -431,7 +435,37 @@ const SynergyCard = ({synergy}) => {
     );
 };
 
-const DossierCard = ({ dossier }) => (
+const CritiqueView = ({ critique }) => (
+    <div className="mt-4 bg-blue-900/40 border border-blue-700 p-3 rounded-lg">
+        <h4 className="text-lg font-bold text-cyan-200 mb-2">Critical Analysis</h4>
+        
+        <div className="mb-3">
+            <h5 className="font-semibold text-emerald-300 mb-1">Strengths</h5>
+            <p className="text-sm text-slate-300">{critique.strengths}</p>
+        </div>
+        
+        <div className="mb-3">
+            <h5 className="font-semibold text-yellow-300 mb-1">Weaknesses & Risks</h5>
+            <p className="text-sm text-slate-300">{critique.weaknesses}</p>
+        </div>
+
+        {critique.contradictoryEvidence && critique.contradictoryEvidence.length > 0 && (
+            <div className="mb-3">
+                <h5 className="font-semibold text-red-300 mb-1">Contradictory Evidence</h5>
+                <ul className="list-disc list-inside text-sm text-slate-300 space-y-1">
+                    {critique.contradictoryEvidence.map((ev, i) => <li key={i}>{ev}</li>)}
+                </ul>
+            </div>
+        )}
+
+        <div>
+             <h5 className="font-semibold text-cyan-300 mb-1">Overall Verdict</h5>
+             <p className="text-sm font-bold text-white">{critique.overallVerdict}</p>
+        </div>
+    </div>
+);
+
+const DossierCard = ({ dossier, critique }) => (
     <div className="bg-slate-800/70 p-4 rounded-lg border border-amber-400/30 flex flex-col gap-4">
         <div className="border-b border-amber-400/20 pb-2">
             <h3 className="text-xl font-bold text-amber-300 drop-shadow-[0_0_4px_rgba(252,211,77,0.5)]">{dossier.combination.join(' + ')}</h3>
@@ -457,6 +491,7 @@ const DossierCard = ({ dossier }) => (
             <h4 className="font-semibold text-yellow-300 mb-1">Risk Analysis</h4>
             <p className="text-sm text-slate-300">{dossier.risks}</p>
         </div>
+        {critique && <CritiqueView critique={critique} />}
     </div>
 );
 
@@ -502,6 +537,13 @@ const epigeneticClockAge = chronologicalAge * (1 + (infoLossScore / 110));
 const functionalDecline = ((100 - currentOrganoidForStats.mitoEfficiency) + (100 - currentOrganoidForStats.networkActivity) + (100 - currentOrganoidForStats.proteostasisQuality)) / 3;
 const functionalClockAge = chronologicalAge * (1 + (functionalDecline / 110));
 
+const critiqueMap = new Map();
+critiques.forEach(c => {
+    if(c.combination) {
+        const key = c.combination.join(' + ');
+        critiqueMap.set(key, c);
+    }
+});
 
 return (
     <div className="h-full w-full flex bg-slate-900 text-slate-200 font-sans">
@@ -589,12 +631,9 @@ return (
                         <p className="text-xs text-slate-500 text-center pt-1">API keys are stored locally in your browser.</p>
                     }
                 </div>
-                <div className="mt-2 flex gap-2">
-                     <button onClick={handleStart} disabled={isSwarmRunning || !taskPrompt.trim()} className="flex-1 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold py-2 px-4 rounded-lg disabled:from-slate-700 disabled:to-slate-600 disabled:text-slate-400 disabled:cursor-not-allowed transition-all">
-                        {isSwarmRunning ? 'Working...' : 'Begin Research'}
-                    </button>
-                    <button onClick={handleStartProposalGeneration} disabled={isSwarmRunning} className="flex-1 bg-gradient-to-r from-amber-600 to-yellow-600 hover:from-amber-500 hover:to-yellow-500 text-white font-bold py-2 px-4 rounded-lg disabled:from-slate-700 disabled:to-slate-600 disabled:text-slate-400 disabled:cursor-not-allowed transition-all">
-                        Generate Proposals
+                <div className="mt-2 flex">
+                    <button onClick={handleStart} disabled={isSwarmRunning || !taskPrompt.trim()} className="w-full bg-gradient-to-r from-amber-600 to-yellow-600 hover:from-amber-500 hover:to-yellow-500 text-white font-bold py-2 px-4 rounded-lg disabled:from-slate-700 disabled:to-slate-600 disabled:text-slate-400 disabled:cursor-not-allowed transition-all">
+                        {isSwarmRunning ? 'Working...' : 'Generate Proposals'}
                     </button>
                 </div>
             </div>
@@ -610,7 +649,15 @@ return (
                     {isSwarmRunning && <LoadingIndicator />}
                     {currentTab === 'sources' && !isSwarmRunning && researchHistory.map((src, i) => <SourceCard key={i} source={src} />)}
                     {currentTab === 'synergies' && !isSwarmRunning && synergies.map((syn, i) => <SynergyCard key={i} synergy={syn} />)}
-                    {currentTab === 'proposals' && !isSwarmRunning && dossiers.map((dos, i) => <DossierCard key={i} dossier={dos} />)}
+                    {currentTab === 'proposals' && !isSwarmRunning && dossiers.length > 0 && (
+                        <div className="bg-yellow-900/40 border border-yellow-700 text-yellow-200 text-sm p-3 rounded-lg">
+                            <strong className="font-bold">Disclaimer:</strong> This content is AI-generated and for informational purposes only. It is not scientific or medical advice. All proposals require rigorous verification by qualified experts before any real-world application.
+                        </div>
+                    )}
+                    {currentTab === 'proposals' && !isSwarmRunning && dossiers.map((dos, i) => {
+                        const critique = critiqueMap.get(dos.combination.join(' + '));
+                        return <DossierCard key={i} dossier={dos} critique={critique} />;
+                    })}
                     
                     {!isSwarmRunning && (
                         (currentTab === 'sources' && researchHistory.length === 0) || 

@@ -1,12 +1,91 @@
 
 
-
 import type { ToolCreatorPayload } from '../types';
+
+const CRITIQUE_PROPOSAL_TOOL: ToolCreatorPayload = {
+    name: 'Critique Investment Proposal',
+    description: 'Acts as a skeptical peer reviewer. Takes a generated investment dossier, searches for contradictory evidence and understated risks, and produces a structured critique.',
+    category: 'Functional',
+    executionEnvironment: 'Client',
+    purpose: 'To increase the scientific rigor of generated proposals by subjecting them to an adversarial review process, identifying potential flaws before they are presented.',
+    parameters: [
+        { name: 'dossier', type: 'object', description: 'The full dossier object to be critiqued. Must include combination, scientificRationale, and risks.', required: true },
+    ],
+    implementationCode: `
+        const { dossier } = args;
+        if (!dossier || !dossier.combination || !dossier.scientificRationale) {
+            throw new Error("A valid dossier object with at least a 'combination' and 'scientificRationale' is required for critique.");
+        }
+        const comboString = dossier.combination.join(' + ');
+        runtime.logEvent(\`[Critique] Starting critical analysis for: \${comboString}\`);
+
+        // Step 1: Formulate adversarial search queries
+        const queries = [
+            \`\${comboString} risks side effects contraindications\`,
+            \`"\${comboString}" failed trial\`,
+            \`problems with combining \${dossier.combination.join(' and ')}\`,
+            \`evidence against \${dossier.scientificRationale.substring(0, 150)}\`
+        ];
+        
+        runtime.logEvent(\`[Critique] Searching for counter-evidence...\`);
+        const searchResult = await runtime.tools.run('Federated Scientific Search', { query: queries.join('; '), maxResultsPerSource: 3 });
+        const searchResults = searchResult.searchResults || [];
+
+        let context = \`CRITIQUE THE FOLLOWING INVESTMENT PROPOSAL:\\n\${JSON.stringify(dossier, null, 2)}\`;
+        if (searchResults.length > 0) {
+            const searchContext = searchResults.map(r => \`<EVIDENCE>\\n<TITLE>\${r.title}</TITLE>\\n<SNIPPET>\${r.snippet}</SNIPPET>\\n<URL>\${r.link}</URL>\\n</EVIDENCE>\`).join('\\n\\n');
+            context += \`\\n\\nPOTENTIAL CONTRADICTORY EVIDENCE FOUND:\\n\${searchContext}\`;
+        } else {
+            context += \`\\n\\nNo direct contradictory evidence was found in a preliminary search.\`;
+        }
+
+        const systemInstruction = \`You are a highly skeptical and meticulous scientific peer reviewer and venture capital analyst. Your job is to find flaws in investment proposals.
+-   Analyze the provided dossier and any search evidence.
+-   Your tone should be critical, professional, and evidence-based.
+-   Focus on: 1) Understated or misrepresented risks. 2) Weaknesses in the scientific rationale. 3) Contradictory evidence from the search results. 4) Feasibility of the roadmap and market claims.
+-   Your output MUST be a single JSON object with the keys: "strengths", "weaknesses", "contradictoryEvidence" (an array of strings with citations), and "overallVerdict" ('Sound', 'Needs Revision', 'High Risk'). Do NOT add any text outside the JSON object.\`;
+
+        runtime.logEvent(\`[Critique] Generating critique for \${comboString}...\`);
+        const critiqueJsonString = await runtime.ai.generateText(context, systemInstruction);
+        
+        let critique;
+        try {
+            const jsonMatch = critiqueJsonString.match(/\\{[\\s\\S]*\\}/);
+            if (!jsonMatch) throw new Error("No JSON object found in the AI's critique response.");
+            critique = JSON.parse(jsonMatch[0]);
+        } catch (e) {
+            runtime.logEvent(\`[Critique] ❌ Error parsing critique JSON. AI Response: \${critiqueJsonString}\`);
+            throw new Error(\`Failed to parse the AI's critique response. Details: \${e.message}\`);
+        }
+        
+        // Add the combination to the critique object for easy matching later
+        critique.combination = dossier.combination;
+
+        return { success: true, message: \`Critique generated for \${comboString}\`, critique };
+    `
+};
+
+const RECORD_CRITIQUE_TOOL: ToolCreatorPayload = {
+    name: 'RecordCritique',
+    description: 'Records the structured output from the Critique Investment Proposal tool.',
+    category: 'Functional',
+    executionEnvironment: 'Client',
+    purpose: 'To log the final critique of a proposal, making it available for the UI to display.',
+    parameters: [
+        { name: 'critique', type: 'object', description: 'The full critique object, including combination, strengths, weaknesses, etc.', required: true },
+    ],
+    implementationCode: `
+        const { critique } = args;
+        runtime.logEvent(\`[Critique] Recording critique for: \${critique.combination.join(' + ')}\`);
+        return { success: true, critique };
+    `
+};
+
 
 export const SYNERGY_FORGE_FUNCTIONAL_TOOLS: ToolCreatorPayload[] = [
     {
         name: 'Execute Full Research and Proposal Workflow',
-        description: 'Executes the complete, end-to-end workflow from scientific literature search to generating investment-ready trial dossiers for the most promising synergistic combinations.',
+        description: 'Executes the complete, end-to-end workflow from scientific literature search to generating and then critically reviewing investment-ready trial dossiers for the most promising synergistic combinations.',
         category: 'Automation',
         executionEnvironment: 'Client',
         purpose: 'To provide a single, powerful, and reliable command for the agent to perform its entire core function autonomously.',
@@ -20,7 +99,7 @@ export const SYNERGY_FORGE_FUNCTIONAL_TOOLS: ToolCreatorPayload[] = [
         runtime.logEvent('[Workflow] Starting full research and proposal workflow...');
 
         // Step 1: Federated Search
-        runtime.logEvent('[Workflow] Step 1/7: Searching scientific literature...');
+        runtime.logEvent('[Workflow] Step 1/8: Searching scientific literature...');
         const searchResult = await runtime.tools.run('Federated Scientific Search', { query: researchObjective, maxResultsPerSource: 10 });
         if (!searchResult || !searchResult.searchResults || searchResult.searchResults.length === 0) {
             throw new Error("Workflow failed at Step 1: Federated search returned no results.");
@@ -29,7 +108,7 @@ export const SYNERGY_FORGE_FUNCTIONAL_TOOLS: ToolCreatorPayload[] = [
         runtime.logEvent(\`[Workflow] Found \${searchResults.length} potential sources.\`);
 
         // Step 2: Bootstrap Proxy
-        runtime.logEvent('[Workflow] Step 2/7: Initializing local web proxy service...');
+        runtime.logEvent('[Workflow] Step 2/8: Initializing local web proxy service...');
         let proxyUrl = null;
         try {
             const proxyResult = await runtime.tools.run('Bootstrap Web Proxy Service', {});
@@ -44,7 +123,7 @@ export const SYNERGY_FORGE_FUNCTIONAL_TOOLS: ToolCreatorPayload[] = [
         }
 
         // Step 3: Enrich and Validate
-        runtime.logEvent('[Workflow] Step 3/7: Enriching and validating sources...');
+        runtime.logEvent('[Workflow] Step 3/8: Enriching and validating sources...');
         const validationResult = await runtime.tools.run('Enrich and Validate Sources', { searchResults, proxyUrl });
         if (!validationResult || !validationResult.validatedSources || validationResult.validatedSources.length === 0) {
             throw new Error("Workflow failed at Step 3: No valid scientific sources were found.");
@@ -53,7 +132,7 @@ export const SYNERGY_FORGE_FUNCTIONAL_TOOLS: ToolCreatorPayload[] = [
         runtime.logEvent(\`[Workflow] Validated \${validatedSources.length} sources.\`);
 
         // Step 4: Analyze for Synergies
-        runtime.logEvent('[Workflow] Step 4/7: Analyzing sources for synergistic combinations...');
+        runtime.logEvent('[Workflow] Step 4/8: Analyzing sources for synergistic combinations...');
         const synergyAnalysisResult = await runtime.tools.run('Analyze Sources for Synergies', { validatedSources, researchObjective });
         if (!synergyAnalysisResult || !synergyAnalysisResult.synergies || synergyAnalysisResult.synergies.length === 0) {
             runtime.logEvent('[Workflow] Analysis complete. No synergistic combinations were identified.');
@@ -63,7 +142,7 @@ export const SYNERGY_FORGE_FUNCTIONAL_TOOLS: ToolCreatorPayload[] = [
         runtime.logEvent(\`[Workflow] Identified \${synergies.length} potential synergies.\`);
 
         // Step 5: Record Data & Generate Params
-        runtime.logEvent('[Workflow] Step 5/7: Recording findings and generating simulation parameters...');
+        runtime.logEvent('[Workflow] Step 5/8: Recording findings and generating simulation parameters...');
         const systemInstructionForParams = "You are a game designer translating scientific data into game mechanics. Provide ONLY a valid JSON object with keys like senolytic_clearance, autophagy_boost, etc., and numeric values.";
         for (const synergy of synergies) {
             await runtime.tools.run('RecordSynergy', synergy);
@@ -76,10 +155,15 @@ export const SYNERGY_FORGE_FUNCTIONAL_TOOLS: ToolCreatorPayload[] = [
         runtime.logEvent(\`[Workflow] Recorded \${synergies.length} synergies.\`);
 
         // Step 6: Generate Dossiers for Top Synergies
-        runtime.logEvent(\`[Workflow] Step 6/7: Generating top \${numberOfProposals} investment dossiers...\`);
-        const dossierSystemInstruction = \`You are a senior business analyst and scientific consultant at a biotech venture capital firm. Your task is to write a compelling, data-driven investment dossier based on the provided research. Your response MUST be a single JSON object that conforms to the parameters of the 'RecordTrialDossier' tool.\`;
+        runtime.logEvent(\`[Workflow] Step 6/8: Generating top \${numberOfProposals} investment dossiers...\`);
+        const dossierSystemInstruction = \`You are a senior business analyst and scientific consultant at a biotech venture capital firm with a mandate for ethical and safe investments. Your task is to write a compelling, data-driven investment dossier for a *novel* clinical trial.
+Your response MUST be a single JSON object that conforms to the parameters of the 'RecordTrialDossier' tool.
+Key instructions:
+1.  **Focus on Novelty:** The proposal must be for a new trial. If the synergy is 'Hypothesized', frame it as a first-of-its-kind investigation. If the synergy is 'Known', you MUST frame the proposal around a novel application (e.g., a new patient population or disease indication) or a combination with a third, novel element. Do not propose a trial for something that is already standard practice.
+2.  **Risk Analysis is CRITICAL:** The 'risks' section must be thorough and scientifically accurate. You MUST NOT downplay, misrepresent, or omit known risks, especially for drug combinations (e.g., renal, GI, or cardiovascular toxicity). Accurately reflect the scientific consensus on safety. An inaccurate risk assessment will invalidate the entire proposal.
+3.  **In Silico Validation:** This section should describe the *hypothesized* effects on the SynergyForge simulation's biomarkers based on the mechanisms of action. AVOID making overly specific quantitative claims (e.g., "25% decrease"). Instead, focus on the qualitative impact (e.g., "is expected to significantly reduce markers of inflammation...").\`;
         
-        const topSynergiesPrompt = \`From the following list of synergies, identify the top \${numberOfProposals} most promising candidates for investment based on their scientific rationale, status (Known > Hypothesized), and potential impact. List only their combinations as a JSON array of arrays, e.g., [["Metformin", "Rapamycin"], ["Dasatinib", "Quercetin"]].\\n\\nSynergies: \${JSON.stringify(synergies)}\`;
+        const topSynergiesPrompt = \`From the following list of synergies, identify the top \${numberOfProposals} most promising candidates for investment. You MUST prioritize 'Hypothesized' synergies as they represent novel trial opportunities. Only select 'Known' synergies if there are insufficient 'Hypothesized' candidates. Base your selection on scientific rationale and potential impact. List only their combinations as a JSON array of arrays, e.g., [["Metformin", "Rapamycin"], ["Dasatinib", "Quercetin"]].\\n\\nSynergies: \${JSON.stringify(synergies)}\`;
         const topSynergiesJson = await runtime.ai.generateText(topSynergiesPrompt, "You are a helpful assistant that only outputs JSON.");
         let topCombinations = [];
         try { topCombinations = JSON.parse(topSynergiesJson.match(/\\[[\\s\\S]*\\]/)?.[0] || '[]'); } catch(e) { /* ignore */ }
@@ -87,7 +171,8 @@ export const SYNERGY_FORGE_FUNCTIONAL_TOOLS: ToolCreatorPayload[] = [
         if(topCombinations.length === 0) { // Fallback if AI fails
              topCombinations = synergies.slice(0, numberOfProposals).map(s => s.combination);
         }
-
+        
+        const generatedDossiers = [];
         for (const combination of topCombinations) {
             const comboString = combination.join(' + ');
             runtime.logEvent(\`[Workflow] ...writing dossier for \${comboString}.\`);
@@ -96,16 +181,34 @@ export const SYNERGY_FORGE_FUNCTIONAL_TOOLS: ToolCreatorPayload[] = [
             try {
                 const dossierArgs = JSON.parse(dossierJsonString.match(/\\{[\\s\\S]*\\}/)?.[0] || '{}');
                 if (dossierArgs.combination) {
-                    await runtime.tools.run('RecordTrialDossier', dossierArgs);
+                    const dossierResult = await runtime.tools.run('RecordTrialDossier', dossierArgs);
+                    if (dossierResult.dossier) {
+                        generatedDossiers.push(dossierResult.dossier);
+                    }
                 }
             } catch (e) {
                 runtime.logEvent(\`[Workflow] WARN: Failed to generate or parse dossier for \${comboString}. Error: \${e.message}\`);
             }
         }
         
-        // Step 7: Final Summary
-        runtime.logEvent('[Workflow] Step 7/7: Finalizing...');
-        const finalSummary = \`Workflow completed for objective: "\${researchObjective}". Validated \${validatedSources.length} sources, identified \${synergies.length} synergies, and generated \${topCombinations.length} investment proposals.\`;
+        // Step 7: Critique Generated Dossiers
+        runtime.logEvent('[Workflow] Step 7/8: Subjecting proposals to critical review...');
+        for (const dossier of generatedDossiers) {
+            const comboString = dossier.combination.join(' + ');
+            try {
+                runtime.logEvent(\`[Workflow] ...critiquing dossier for \${comboString}.\`);
+                const critiqueResult = await runtime.tools.run('Critique Investment Proposal', { dossier });
+                if (critiqueResult.critique) {
+                    await runtime.tools.run('RecordCritique', { critique: critiqueResult.critique });
+                }
+            } catch (e) {
+                runtime.logEvent(\`[Workflow] WARN: Failed to generate critique for \${comboString}. Error: \${e.message}\`);
+            }
+        }
+
+        // Step 8: Final Summary
+        runtime.logEvent('[Workflow] Step 8/8: Finalizing...');
+        const finalSummary = \`Workflow completed for objective: "\${researchObjective}". Validated \${validatedSources.length} sources, identified \${synergies.length} synergies, and generated and critiqued \${generatedDossiers.length} investment proposals.\`;
         runtime.logEvent(\`[Workflow] ✅ \${finalSummary}\`);
         return { success: true, message: "Workflow finished successfully.", summary: finalSummary };
     `
@@ -375,16 +478,23 @@ Your output MUST be a single JSON object with a key "sources", which is an array
                 \`<SOURCE \${i + 1}>\\n<TITLE>\${s.title}</TITLE>\\n<RELIABILITY>\${s.reliabilityScore}</RELIABILITY>\\n<SUMMARY>\${s.summary}</SUMMARY>\\n</SOURCE>\`
             ).join('\\n\\n');
 
-            const systemInstruction = \`You are an expert bioinformatics researcher. Your task is to analyze scientific literature to find synergistic combinations of longevity interventions. You MUST identify known synergies and hypothesize novel ones based on complementary mechanisms of action.
-Your output MUST be a single JSON object with a key "synergies", which is an array of objects. Each object must have "combination" (an array of strings), "status" ('Known' or 'Hypothesized'), "synergyType" ('Synergistic', 'Additive', or 'Antagonistic'), and "summary" (your detailed rationale citing sources like [1], [2]).
+            const systemInstruction = \`You are an expert bioinformatics researcher with a strong emphasis on safety and clinical relevance. Your task is to analyze scientific literature to find combinations of longevity interventions.
+For each combination, you must:
+1.  Identify the nature of the interaction: 'Synergistic', 'Additive', or 'Antagonistic'.
+2.  Determine if the synergy is 'Known' (well-documented) or 'Hypothesized' (based on mechanisms).
+3.  Provide a scientific rationale, citing sources like [1], [2].
+4.  CRITICALLY ASSESS and clearly state any potential risks, side effects, or contraindications of the combination (e.g., "Increased risk of renal toxicity"). If no specific risks for the combination are mentioned, extrapolate from the risks of the individual components. This is a mandatory field.
+
+Your output MUST be a single JSON object with a key "synergies", which is an array of objects. Each object must have "combination", "status", "synergyType", "summary", and "potentialRisks".
 Example:
 {
   "synergies": [
     {
-      "combination": ["Metformin", "Rapamycin"],
+      "combination": ["Aspirin (COX Inhibitor)", "Ibuprofen (NSAID)"],
       "status": "Known",
-      "synergyType": "Synergistic",
-      "summary": "Metformin and Rapamycin target complementary pathways (AMPK and mTOR respectively), leading to a greater effect on lifespan extension than either compound alone, as suggested by [1] and [3]."
+      "synergyType": "Antagonistic",
+      "summary": "Combining these NSAIDs does not improve efficacy and significantly increases the risk of gastrointestinal bleeding and renal impairment [4].",
+      "potentialRisks": "High risk of gastrointestinal bleeding, peptic ulcers, and acute kidney injury, especially in the elderly."
     }
   ]
 }
@@ -418,6 +528,8 @@ You MUST respond with ONLY the JSON object.\`;
             };
         `,
     },
+    CRITIQUE_PROPOSAL_TOOL,
+    RECORD_CRITIQUE_TOOL,
     {
         name: 'RecordSynergy',
         description: 'Records the details of a single synergistic intervention identified from the literature.',
@@ -429,9 +541,10 @@ You MUST respond with ONLY the JSON object.\`;
             { name: 'status', type: 'string', description: 'The status of the synergy, either "Known" or "Hypothesized".', required: true },
             { name: 'synergyType', type: 'string', description: 'The type of interaction, e.g., "Synergistic", "Additive", "Antagonistic".', required: true },
             { name: 'summary', type: 'string', description: 'A brief explanation of the synergistic interaction and the rationale behind it.', required: true },
+            { name: 'potentialRisks', type: 'string', description: 'A clear description of potential risks, side effects, or contraindications of the combination.', required: true },
         ],
         implementationCode: `
-            const { combination, status, synergyType, summary } = args;
+            const { combination, status, synergyType, summary, potentialRisks } = args;
             runtime.logEvent(\`[Synergy Analysis] Recording synergy: \${combination.join(' + ')}\`);
             
             return {
@@ -441,6 +554,7 @@ You MUST respond with ONLY the JSON object.\`;
                     status,
                     synergyType,
                     summary,
+                    potentialRisks,
                 }
             };
         `
