@@ -37,23 +37,38 @@ type StepStatus = { status: 'pending' | 'completed' | 'error'; result?: any; err
 const resultToString = (result: any): string => {
     if (result === undefined || result === null) return 'No result.';
 
-    // Custom replacer to truncate long strings, especially summaries inside validatedSources
-    const replacer = (key: string, value: any) => {
-        if (key === 'implementationCode') return '[...code...]';
-        if (key === 'summary' && typeof value === 'string' && value.length > 200) {
-            return value.substring(0, 200) + '...';
+    try {
+        // Custom replacer to aggressively truncate long text fields to keep history concise.
+        const replacer = (key: string, value: any) => {
+            if (key === 'implementationCode') return '[...code...]';
+            if ((key === 'summary' || key === 'snippet') && typeof value === 'string' && value.length > 150) {
+                return value.substring(0, 150) + '...';
+            }
+            return value;
+        };
+        
+        // Pre-sanitize the result to shorten long text fields.
+        const sanitizedResult = JSON.parse(JSON.stringify(result, replacer));
+        let str = JSON.stringify(sanitizedResult);
+
+        // If the string is still too long after sanitation, we must return a valid summary, not a broken string.
+        if (str.length > 2500) {
+            // Special summary for search results, which are a common cause of large outputs.
+            if (sanitizedResult && Array.isArray(sanitizedResult.searchResults)) {
+                return JSON.stringify({
+                    success: sanitizedResult.success,
+                    message: `Found ${sanitizedResult.searchResults.length} articles. The full list is available to be passed to the next tool, but was omitted from history for brevity.`,
+                });
+            }
+            // Generic summary for other large tool outputs.
+            return `Tool executed successfully, but its output is too large to display in this context.`;
         }
-        return value;
-    };
+        
+        return str;
 
-    const sanitizedResult = JSON.parse(JSON.stringify(result, replacer));
-    let str = JSON.stringify(sanitizedResult);
-
-    // Keep the total length limit as a final safeguard
-    if (str.length > 2000) { // Increased limit
-        str = str.substring(0, 2000) + '... (truncated overall)';
+    } catch (e) {
+        return `[Error: Could not serialize the tool's result for display in history.]`;
     }
-    return str;
 };
 
 

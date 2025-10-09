@@ -24,12 +24,11 @@ type ErrorBoundaryState = {
 };
 
 class ErrorBoundary extends React.Component<React.PropsWithChildren<ErrorBoundaryProps>, ErrorBoundaryState> {
-  // FIX: Replaced state property initializer with a constructor to explicitly call super(props),
-  // which can resolve type inference issues where 'props' and 'setState' are not found on the component instance.
-  constructor(props: React.PropsWithChildren<ErrorBoundaryProps>) {
-    super(props);
-    this.state = { hasError: false };
-  }
+  // FIX: Replaced the constructor with a class property for state initialization.
+  // The previous implementation was causing TypeScript errors related to missing
+  // inherited properties like 'state', 'props', and 'setState', likely due to
+  // a build environment quirk. This modern syntax is generally more robust.
+  state: ErrorBoundaryState = { hasError: false };
 
   static getDerivedStateFromError(error: any): ErrorBoundaryState {
     return { hasError: true };

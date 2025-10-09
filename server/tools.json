@@ -1,1 +1,87 @@
-[]
+[
+  {
+    "id": "start_node_process",
+    "name": "Start Node Process",
+    "description": "Starts a managed Node.js process on the server from a given script file.",
+    "category": "Server",
+    "version": 1,
+    "parameters": [
+      {
+        "name": "processId",
+        "type": "string",
+        "description": "A unique ID for the process (e.g., \"aetherium_shard_1\").",
+        "required": true
+      },
+      {
+        "name": "scriptPath",
+        "type": "string",
+        "description": "The path to the Node.js script to run, relative to the server's 'scripts' directory (e.g., \"aetherium_server.ts\").",
+        "required": true
+      }
+    ],
+    "purpose": "To dynamically launch and manage server-side Node.js processes like game worlds or APIs.",
+    "implementationCode": "start_node_process",
+    "createdAt": "2024-08-01T10:00:00.000Z",
+    "updatedAt": "2024-08-01T10:00:00.000Z",
+    "executionEnvironment": "Server"
+  },
+  {
+    "id": "start_python_process",
+    "name": "Start Python Process",
+    "description": "Starts a managed Python process on the server from a given script file, using the server's virtual environment.",
+    "category": "Server",
+    "version": 1,
+    "parameters": [
+      {
+        "name": "processId",
+        "type": "string",
+        "description": "A unique ID for the process (e.g., \"gazebo_service\").",
+        "required": true
+      },
+      {
+        "name": "scriptPath",
+        "type": "string",
+        "description": "The path to the Python script to run, relative to the server's 'scripts' directory (e.g., \"gazebo_service.py\").",
+        "required": true
+      }
+    ],
+    "purpose": "To dynamically launch and manage server-side Python processes like the Gazebo service or other automation scripts.",
+    "implementationCode": "start_python_process",
+    "createdAt": "2024-08-01T10:00:00.000Z",
+    "updatedAt": "2024-08-01T10:00:00.000Z",
+    "executionEnvironment": "Server"
+  },
+  {
+    "id": "stop_process",
+    "name": "Stop Process",
+    "description": "Stops a managed Node.js or Python process by its unique ID.",
+    "category": "Server",
+    "version": 1,
+    "parameters": [
+      {
+        "name": "processId",
+        "type": "string",
+        "description": "The ID of the process to stop.",
+        "required": true
+      }
+    ],
+    "purpose": "To terminate any running server-side process.",
+    "implementationCode": "stop_process",
+    "createdAt": "2024-08-01T10:00:00.000Z",
+    "updatedAt": "2024-08-01T10:00:00.000Z",
+    "executionEnvironment": "Server"
+  },
+  {
+    "id": "list_managed_processes",
+    "name": "List Managed Processes",
+    "description": "Lists all currently managed Node.js and Python processes running on the server.",
+    "category": "Server",
+    "version": 1,
+    "parameters": [],
+    "purpose": "To monitor and get the status of all running server-side processes.",
+    "implementationCode": "list_managed_processes",
+    "createdAt": "2024-08-01T10:00:00.000Z",
+    "updatedAt": "2024-08-01T10:00:00.000Z",
+    "executionEnvironment": "Server"
+  }
+]

@@ -69,6 +69,55 @@ const buildOpenAITools = (tools: LLMTool[]) => {
     }));
 };
 
+const parseToolCallFromText = (text: string, toolNameMap: Map<string, string>): AIToolCall[] | null => {
+    if (!text) return null;
+
+    // Regex to find a JSON block, optionally inside ```json ... ```
+    const jsonRegex = /```json\s*([\s\S]*?)\s*```|({[\s\S]*}|\[[\s\S]*\])/m;
+    const match = text.match(jsonRegex);
+
+    if (!match) return null;
+
+    // Use the content from the capture group, preferring the one inside backticks
+    const jsonString = match[1] || match[2];
+    if (!jsonString) return null;
+
+    try {
+        let parsedJson = JSON.parse(jsonString);
+        
+        // The model might return a single object instead of an array
+        if (!Array.isArray(parsedJson)) {
+            parsedJson = [parsedJson];
+        }
+
+        const toolCalls: AIToolCall[] = [];
+        for (const call of parsedJson) {
+            if (typeof call !== 'object' || call === null) continue;
+
+            // Be flexible: find keys for name and arguments
+            const nameKey = Object.keys(call).find(k => k.toLowerCase().includes('name'));
+            const argsKey = Object.keys(call).find(k => k.toLowerCase().includes('arguments'));
+
+            if (nameKey && argsKey && typeof call[nameKey] === 'string' && typeof call[argsKey] === 'object') {
+                const rawName = call[nameKey];
+                // Try to map back from a potentially sanitized name, but also accept the original name.
+                const originalName = toolNameMap.get(rawName.replace(/[^a-zA-Z0-9_]/g, '_')) || toolNameMap.get(rawName) || rawName;
+                
+                toolCalls.push({
+                    name: originalName,
+                    arguments: call[argsKey]
+                });
+            }
+        }
+        
+        return toolCalls.length > 0 ? toolCalls : null;
+
+    } catch (e) {
+        console.warn(`[OpenAI Service] Fallback tool call parsing failed for JSON string: "${jsonString}"`, e);
+        return null;
+    }
+};
+
 export const generateWithTools = async (
     userInput: string,
     systemInstruction: string,
@@ -84,6 +133,10 @@ export const generateWithTools = async (
     
     const openAITools = buildOpenAITools(tools);
     const toolNameMap = new Map(tools.map(t => [t.name.replace(/[^a-zA-Z0-9_]/g, '_'), t.name]));
+    // Add original names as well for the fallback parser to find them
+    tools.forEach(tool => {
+        toolNameMap.set(tool.name, tool.name);
+    });
 
     const userMessageContent: any[] = [{ type: 'text', text: userInput }];
     if (files && files.length > 0) {
@@ -97,10 +150,18 @@ export const generateWithTools = async (
         });
     }
 
+    const fallbackInstruction = `\n\nWhen you need to use a tool, you can use the provided 'tools' array. If the tool functionality is unavailable or you are not configured for it, you MUST respond with ONLY a JSON object (or an array of objects) in the following format, inside a \`\`\`json block:
+[
+  {
+    "name": "tool_name_to_call",
+    "arguments": { "arg1": "value1", "arg2": "value2" }
+  }
+]`;
+
     const body = {
         model: modelId,
         messages: [
-            { role: 'system', content: systemInstruction },
+            { role: 'system', content: systemInstruction + fallbackInstruction },
             { role: 'user', content: userMessageContent }
         ],
         temperature: 0.1,
@@ -158,11 +219,22 @@ export const generateWithTools = async (
             }
         }
         
+        // Fallback: Check text content for a tool call
+        const responseContent = data.choices?.[0]?.message?.content;
+        if (responseContent) {
+            console.log("[OpenAI Service] No native tool call found. Attempting to parse from text content.");
+            const parsedToolCalls = parseToolCallFromText(responseContent, toolNameMap);
+            if (parsedToolCalls) {
+                console.log("[OpenAI Service] Successfully parsed tool call from text.", parsedToolCalls);
+                return { toolCalls: parsedToolCalls };
+            }
+        }
+        
         return { toolCalls: null };
 
     } catch (e) {
         if (e instanceof Error && e.message.toLowerCase().includes('failed to fetch')) {
-             throw new Error(`Network Error: Could not connect to OpenAI-compatible API at ${openAIBaseUrl}. Check the URL and your network connection.`);
+             throw new Error(`Network Error: Could not connect to OpenAI-compatible API at ${openAIBaseUrl}. \n\nCommon causes:\n1. The server is not running.\n2. The Base URL is incorrect.\n3. A browser security feature (CORS) is blocking the request. If you are running a local server (like Ollama), ensure it's configured to accept requests from this web app's origin.`);
         }
         throw e;
     }
@@ -221,7 +293,7 @@ export const generateText = async (
         return data.choices?.[0]?.message?.content || "";
     } catch (e) {
         if (e instanceof Error && e.message.toLowerCase().includes('failed to fetch')) {
-             throw new Error(`Network Error: Could not connect to OpenAI-compatible API at ${openAIBaseUrl}. Check the URL and your network connection.`);
+             throw new Error(`Network Error: Could not connect to OpenAI-compatible API at ${openAIBaseUrl}. \n\nCommon causes:\n1. The server is not running.\n2. The Base URL is incorrect.\n3. A browser security feature (CORS) is blocking the request. If you are running a local server (like Ollama), ensure it's configured to accept requests from this web app's origin.`);
         }
         throw e;
     }

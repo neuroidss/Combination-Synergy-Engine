@@ -5,6 +5,7 @@ import type { SearchDataSource, SearchResult } from '../types';
 const PROXY_BUILDERS = [
     (url: string) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
     (url: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+    (url:string) => `https://thingproxy.freeboard.io/fetch/${url}`,
 ];
 
 const PRIMARY_SOURCE_DOMAINS = [
@@ -28,25 +29,66 @@ export const isPrimarySourceDomain = (url: string): boolean => {
     }
 };
 
-const fetchWithCorsFallback = async (url: string, logEvent: (message: string) => void): Promise<Response> => {
+const fetchWithCorsFallback = async (url: string, logEvent: (message: string) => void, proxyUrl?: string): Promise<Response> => {
+    // Strategy 1: Prioritize the local Web Proxy MCP if its URL is provided.
+    // If the proxy is specified, we treat it as the ONLY valid method.
+    // This prevents falling back to unreliable public proxies when a local, reliable one is expected.
+    if (proxyUrl) {
+        logEvent(`[Fetch] Attempting fetch via mandated Web Proxy MCP at ${proxyUrl}...`);
+        try {
+            const proxyResponse = await fetch(`${proxyUrl}/browse`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url }),
+            });
+
+            if (!proxyResponse.ok) {
+                // If the proxy server responds with an error, we throw.
+                const errorData = await proxyResponse.json().catch(() => ({ error: 'Proxy returned non-JSON error response.' }));
+                throw new Error(`Local proxy service failed with status ${proxyResponse.status}: ${errorData.error || 'Unknown error'}`);
+            }
+
+            const data = await proxyResponse.json();
+            if (data.success && data.htmlContent) {
+                logEvent(`[Fetch] Success with local Web Proxy MCP.`);
+                return new Response(data.htmlContent, {
+                    status: 200,
+                    headers: { 'Content-Type': 'text/html' },
+                });
+            }
+            // If the proxy reports success:false, we throw.
+            throw new Error(data.error || "Local proxy returned 'success: false' but no error message.");
+
+        } catch (error) {
+             // If we can't even connect to the proxy, we throw.
+             logEvent(`[Fetch] FATAL: Could not connect to or get a valid response from the Web Proxy MCP. Aborting fetch. Error: ${error instanceof Error ? error.message : String(error)}`);
+             throw new Error(`Failed to use the local web proxy at ${proxyUrl}. Ensure the server is running and the 'Bootstrap Web Proxy Service' tool ran successfully. Error: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
+
+    // --- Fallback behavior ONLY executes if no proxyUrl was provided ---
+    logEvent('[Fetch] No local proxy specified. Using fallback methods (direct fetch, public proxies).');
+    
+    // 2. Attempt Direct Fetch
     logEvent(`[Fetch] Attempting direct fetch for: ${url.substring(0, 100)}...`);
     try {
         const response = await fetch(url);
         if (response.ok) {
             return response;
         }
-        logEvent(`[Fetch] Direct fetch for ${url} failed with status ${response.status}. Falling back to proxy.`);
+        logEvent(`[Fetch] Direct fetch for ${url} failed with status ${response.status}. Falling back to public proxies.`);
     } catch (error) {
-        logEvent(`[Fetch] Direct fetch for ${url} failed, likely due to CORS. Falling back to proxy.`);
+        logEvent(`[Fetch] Direct fetch for ${url} failed, likely due to CORS. Falling back to public proxies.`);
     }
 
+    // 3. Fallback to Public Proxies
     for (const buildProxyUrl of PROXY_BUILDERS) {
-        const proxyUrl = buildProxyUrl(url);
+        const publicProxyUrl = buildProxyUrl(url);
         try {
-            logEvent(`[Fetch] Attempting fetch via proxy: ${new URL(proxyUrl).hostname}`);
-            const response = await fetch(proxyUrl, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+            logEvent(`[Fetch] Attempting fetch via proxy: ${new URL(publicProxyUrl).hostname}`);
+            const response = await fetch(publicProxyUrl, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
             if (response.ok) {
-                logEvent(`[Fetch] Success with proxy: ${new URL(proxyUrl).hostname}`);
+                logEvent(`[Fetch] Success with proxy: ${new URL(publicProxyUrl).hostname}`);
                 return response;
             }
             logEvent(`[Fetch] WARN: Proxy failed with status ${response.status}.`);
@@ -58,6 +100,45 @@ const fetchWithCorsFallback = async (url: string, logEvent: (message: string) =>
 };
 
 const stripTags = (html: string) => html.replace(/<[^>]*>?/gm, '').trim();
+
+export const searchWeb = async (query: string, logEvent: (message: string) => void, limit: number): Promise<SearchResult[]> => {
+    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+    const results: SearchResult[] = [];
+    try {
+        const response = await fetchWithCorsFallback(url, logEvent);
+        const htmlContent = await response.text();
+        
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(htmlContent, 'text/html');
+        const resultElements = doc.querySelectorAll('.web-result');
+        
+        resultElements.forEach(el => {
+            const titleLink = el.querySelector<HTMLAnchorElement>('a.result__a');
+            const snippetEl = el.querySelector('.result__snippet');
+
+            if (titleLink && snippetEl) {
+                const hrefAttr = titleLink.getAttribute('href');
+                if (hrefAttr) {
+                    const redirectUrl = new URL(hrefAttr, 'https://duckduckgo.com');
+                    const actualLink = redirectUrl.searchParams.get('uddg');
+
+                    if (actualLink) {
+                        results.push({
+                            link: actualLink,
+                            title: (titleLink.textContent || '').trim(),
+                            snippet: (snippetEl.textContent || '').trim(),
+                            source: 'WebSearch' as SearchDataSource.WebSearch
+                        });
+                    }
+                }
+            }
+        });
+        logEvent(`[Search.Web] Success via DuckDuckGo, found ${results.length} results.`);
+    } catch (error) {
+        logEvent(`[Search.Web] Error: ${error}`);
+    }
+    return results.slice(0, limit);
+};
 
 export const searchPubMed = async (query: string, logEvent: (message: string) => void, limit: number): Promise<SearchResult[]> => {
     const results: SearchResult[] = [];
@@ -145,10 +226,30 @@ export const searchGooglePatents = async (query: string, logEvent: (message: str
         const response = await fetchWithCorsFallback(url, logEvent);
         const rawText = await response.text();
         
-        const firstBraceIndex = rawText.indexOf('{');
-        if (firstBraceIndex === -1) throw new Error(`No JSON object found in response.`);
+        let patentJsonText = rawText;
+        try {
+            // Check if the response is from a proxy like allorigins that wraps the content
+            const proxyData = JSON.parse(rawText);
+            if (proxyData && typeof proxyData.contents === 'string') {
+                patentJsonText = proxyData.contents;
+            } else if (proxyData && (proxyData.error || proxyData.status?.error)) {
+                 throw new Error(`Proxy service returned an error: ${proxyData.error || JSON.stringify(proxyData.status)}`);
+            }
+        } catch (e) {
+            // If it's not JSON, it could be the raw response or an HTML error page from the proxy.
+            if (rawText.trim().startsWith('<')) {
+                throw new Error("Proxy returned an HTML error page, not the expected JSON content.");
+            }
+            // If it's not JSON and not HTML, we assume it's the raw content from a direct fetch or a transparent proxy.
+        }
+
+        // Google XHR responses sometimes start with )]}' to prevent JSON hijacking.
+        const firstBraceIndex = patentJsonText.indexOf('{');
+        if (firstBraceIndex === -1) {
+            throw new Error(`No JSON object found in patent response. Content starts with: ${patentJsonText.substring(0, 150)}`);
+        }
         
-        const jsonText = rawText.substring(firstBraceIndex);
+        const jsonText = patentJsonText.substring(firstBraceIndex);
         const data = JSON.parse(jsonText);
         
         const patents = data.results?.cluster?.[0]?.result || [];
@@ -200,7 +301,7 @@ const extractDoi = (text: string): string | null => {
     return match ? match[1] : null;
 };
 
-export const enrichSource = async (source: SearchResult, logEvent: (message: string) => void): Promise<SearchResult> => {
+export const enrichSource = async (source: SearchResult, logEvent: (message: string) => void, proxyUrl?: string): Promise<SearchResult> => {
     if (source.snippet?.startsWith('[DOI Found]') || source.snippet?.startsWith('Fetch failed')) {
         logEvent(`[Enricher] Skipping enrichment for ${source.link} as it appears to be already processed.`);
         return source;
@@ -216,7 +317,7 @@ export const enrichSource = async (source: SearchResult, logEvent: (message: str
         logEvent(`[Enricher] Found ${server} DOI: ${doi}. Attempting to use official API.`);
         try {
             const apiUrl = `https://api.biorxiv.org/details/${server}/${doi}`;
-            const response = await fetchWithCorsFallback(apiUrl, logEvent);
+            const response = await fetchWithCorsFallback(apiUrl, logEvent, proxyUrl);
             if (!response.ok) {
                 throw new Error(`API returned status ${response.status}`);
             }
@@ -243,7 +344,7 @@ export const enrichSource = async (source: SearchResult, logEvent: (message: str
     const urlToScrape = doi ? `https://doi.org/${doi}` : source.link;
 
     try {
-        const response = await fetchWithCorsFallback(urlToScrape, logEvent);
+        const response = await fetchWithCorsFallback(urlToScrape, logEvent, proxyUrl);
         const finalUrl = response.url;
         const linkToSave = (finalUrl && !finalUrl.includes('corsproxy') && !finalUrl.includes('allorigins') && !finalUrl.includes('thingproxy'))
             ? finalUrl

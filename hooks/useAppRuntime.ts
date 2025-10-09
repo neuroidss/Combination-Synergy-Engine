@@ -42,15 +42,21 @@ export const useAppRuntime = () => {
         isServerConnected: () => toolManager.isServerConnected,
         forceRefreshServerTools: toolManager.forceRefreshServerTools,
         tools: {
-            run: (toolName: string, args: Record<string, any>): Promise<any> => {
+            run: async (toolName: string, args: Record<string, any>): Promise<any> => {
                 if (!executeActionRef.current) {
-                    return Promise.reject(new Error("Execution context not initialized."));
+                    throw new Error("Execution context not initialized.");
                 }
                 const toolCall: AIToolCall = { name: toolName, arguments: args };
-                return executeActionRef.current(toolCall, 'user-manual').then(result => {
-                    if (result.executionError) throw new Error(result.executionError);
-                    return result.executionResult;
-                });
+                const result = await executeActionRef.current(toolCall, 'user-manual');
+                
+                // Add the result of this manual run to the main swarm history.
+                // This ensures that tools called by other tools (e.g., in a workflow) are recorded.
+                swarmManager.appendToSwarmHistory(result);
+
+                if (result.executionError) {
+                    throw new Error(result.executionError);
+                }
+                return result.executionResult;
             },
             add: (payload: ToolCreatorPayload): LLMTool => {
                 const newTool = {
@@ -70,7 +76,8 @@ export const useAppRuntime = () => {
             pubmed: (query: string, limit: number) => searchService.searchPubMed(query, stateManager.logEvent, limit),
             biorxiv: (query: string, limit: number) => searchService.searchBioRxivPmcArchive(query, stateManager.logEvent, limit),
             patents: (query: string, limit: number) => searchService.searchGooglePatents(query, stateManager.logEvent, limit),
-            enrichSource: (source: SearchResult) => searchService.enrichSource(source, stateManager.logEvent),
+            web: (query: string, limit: number) => searchService.searchWeb(query, stateManager.logEvent, limit),
+            enrichSource: (source: SearchResult, proxyUrl?: string) => searchService.enrichSource(source, stateManager.logEvent, proxyUrl),
         },
         ai: {
             generateText: (text: string, systemInstruction: string, files: {name: string, type: string, data: string}[] = []) => {
@@ -84,7 +91,7 @@ export const useAppRuntime = () => {
         },
         getObservationHistory: () => [], // Placeholder for a more advanced feature
         clearObservationHistory: () => {}, // Placeholder
-    }), [stateManager, toolManager]);
+    }), [stateManager, toolManager, swarmManager]);
 
     const executeAction = useMemo<ExecuteActionFunction>(() => {
         const fn = async (
@@ -102,14 +109,39 @@ export const useAppRuntime = () => {
                 return { toolCall, executionError: error };
             }
 
+            if (tool.executionEnvironment === 'Server') {
+                if (!toolManager.isServerConnected) {
+                    const error = `Server tool '${tool.name}' cannot be executed: Server is not connected.`;
+                    log(`[ERROR] ${error}`);
+                    return { toolCall, tool, executionError: error };
+                }
+                try {
+                    const response = await fetch('http://localhost:3001/api/execute', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(toolCall),
+                    });
+                    const result = await response.json();
+                    if (!response.ok) {
+                        throw new Error(result.error || `Server responded with status ${response.status}`);
+                    }
+                    log(`Tool '${tool.name}' executed successfully on the server.`);
+                    return { toolCall, tool, executionResult: result };
+                } catch (e: any) {
+                    const error = `Error executing server tool '${tool.name}': ${e.message}`;
+                    log(`[ERROR] ${error}`);
+                    return { toolCall, tool, executionError: e.message };
+                }
+            }
+
             try {
                 const code = tool.implementationCode;
                 const func = new Function('args', 'runtime', `return (async () => { ${code} })()`);
                 const result = await func(toolCall.arguments, runtimeApi);
-                log(`Tool '${toolCall.name}' executed successfully.`);
+                log(`Tool '${tool.name}' executed successfully.`);
                 return { toolCall, tool, executionResult: result };
             } catch (e: any) {
-                const error = `Error in tool '${toolCall.name}': ${e.message}`;
+                const error = `Error in tool '${tool.name}': ${e.message}`;
                 log(`[ERROR] ${error}`);
                 return { toolCall, tool, executionError: e.message };
             }
@@ -118,7 +150,7 @@ export const useAppRuntime = () => {
         fn.getRuntimeApiForAgent = (agentId: string) => runtimeApi;
 
         return fn;
-    }, [getTool, stateManager.logEvent, runtimeApi]);
+    }, [getTool, stateManager.logEvent, runtimeApi, toolManager.isServerConnected]);
 
     executeActionRef.current = executeAction;
 

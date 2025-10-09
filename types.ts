@@ -100,6 +100,7 @@ export enum SearchDataSource {
     PubMed = 'PubMed',
     BioRxivPmcArchive = 'BioRxivPmcArchive',
     GooglePatents = 'GooglePatents',
+    WebSearch = 'WebSearch',
 }
 
 export interface SearchResult {

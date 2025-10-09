@@ -1,3 +1,4 @@
+
 import type { ToolCreatorPayload } from '../types';
 
 export const SYNERGY_FORGE_TOOLS: ToolCreatorPayload[] = [{
@@ -191,7 +192,7 @@ React.useEffect(() => {
 
                 const healthDeclineRate = prev.overallHealth > nextState.overallHealth ? prev.overallHealth - nextState.overallHealth : 0.01;
                 const newLifespan = nextState.age + (nextState.overallHealth / healthDeclineRate);
-                nextState.lifespan = isFinite(newLifespan) ? newLifespan : prev.lifespan;
+                nextState.lifespan = Number.isFinite(newLifespan) ? newLifespan : prev.lifespan;
                 
                 const synapticDecline = (nextState.inflammationLevel / 100 * 0.1) + (nextState.extracellularWaste / 100 * 0.1) + ((100-nextState.proteostasisQuality)/100 * 0.05);
                 nextState.synapticDensity = Math.max(0, prev.synapticDensity - synapticDecline);
@@ -381,6 +382,30 @@ const MiniOrganoid = ({ theoryKey, organoid }) => {
     );
 };
 
+const AgingClock = ({ name, biologicalAge, chronologicalAge }) => {
+    const ageDifference = biologicalAge - chronologicalAge;
+    let colorClass = 'text-yellow-300';
+    let differenceText = \`~\${ageDifference.toFixed(1)} days\`;
+
+    if (ageDifference < -1) {
+        colorClass = 'text-emerald-300';
+        differenceText = \`-\${Math.abs(ageDifference).toFixed(1)} days\`;
+    } else if (ageDifference > 1) {
+        colorClass = 'text-red-300';
+        differenceText = \`+\${ageDifference.toFixed(1)} days\`;
+    }
+
+    return (
+        <div className="bg-black/40 p-3 rounded-lg border border-slate-700 flex flex-col items-center justify-center text-center">
+            <div className="text-xs uppercase tracking-wider text-cyan-400 mb-1">{name}</div>
+            <div className="text-2xl font-bold text-slate-100">{biologicalAge.toFixed(1)}</div>
+            <div className="text-xs text-slate-400">Bio Age (days)</div>
+            <div className={\`mt-2 text-sm font-semibold \${colorClass}\`}>{differenceText}</div>
+            <div className="text-xs text-slate-500">vs Chrono Age ({chronologicalAge})</div>
+        </div>
+    );
+};
+
 const SourceCard = ({source}) => (
     <div className="bg-slate-800/60 p-3 rounded-lg border border-slate-700 transition-colors hover:border-cyan-500/80 hover:bg-slate-800">
         <a href={source.url} target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:underline font-semibold block truncate">{source.title}</a>
@@ -469,6 +494,14 @@ const statsForSelectedTab = ['age', 'lifespan', 'totalCellCount', 'overallHealth
 const uniqueStatsForTab = [...new Set(statsForSelectedTab)];
 const currentOrganoidForStats = organoids[selectedStatTab];
 
+const chronologicalAge = currentOrganoidForStats.age;
+const damageScore = (currentOrganoidForStats.dnaDamage + currentOrganoidForStats.oxidativeStress + currentOrganoidForStats.extracellularWaste) / 3;
+const damageClockAge = chronologicalAge * (1 + (damageScore / 110));
+const infoLossScore = (currentOrganoidForStats.epigeneticNoise * 0.7 + currentOrganoidForStats.misexpressionChance * 0.3);
+const epigeneticClockAge = chronologicalAge * (1 + (infoLossScore / 110));
+const functionalDecline = ((100 - currentOrganoidForStats.mitoEfficiency) + (100 - currentOrganoidForStats.networkActivity) + (100 - currentOrganoidForStats.proteostasisQuality)) / 3;
+const functionalClockAge = chronologicalAge * (1 + (functionalDecline / 110));
+
 
 return (
     <div className="h-full w-full flex bg-slate-900 text-slate-200 font-sans">
@@ -484,15 +517,16 @@ return (
                     <label htmlFor="model-selector" className="text-sm font-semibold text-slate-300">AI Model:</label>
                     <select 
                         id="model-selector"
-                        value={selectedModel.id}
+                        value={selectedModel.id + '|' + selectedModel.provider}
                         onChange={(e) => {
-                            const model = availableModels.find(m => m.id === e.target.value);
+                            const [id, provider] = e.target.value.split('|');
+                            const model = availableModels.find(m => m.id === id && m.provider === provider);
                             if (model) setSelectedModel(model);
                         }}
                         className="w-full mt-1 bg-slate-800 border border-slate-600 rounded-lg p-2 text-sm text-slate-200 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500"
                     >
-                        {availableModels.map(model => (
-                            <option key={model.id} value={model.id}>
+                        {availableModels.map((model, index) => (
+                            <option key={model.id + '|' + model.provider + '|' + index} value={model.id + '|' + model.provider}>
                                 {model.name} ({model.provider})
                             </option>
                         ))}
@@ -594,8 +628,17 @@ return (
             </div>
             <p className="text-sm text-slate-400 -mt-3">A Parallel Theory Sandbox</p>
             
-            <div className="grid grid-cols-2 gap-4 flex-shrink-0">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 flex-shrink-0">
                {THEORY_KEYS.map(key => <MiniOrganoid key={key} theoryKey={key} organoid={organoids[key]} />)}
+            </div>
+
+            <div className="flex-shrink-0 mt-4">
+                <h3 className="text-xl font-semibold text-slate-300 mb-2">Integrated Aging Clocks ({THEORIES[selectedStatTab].name})</h3>
+                <div className="grid grid-cols-3 gap-4">
+                    <AgingClock name="Damage Clock" biologicalAge={damageClockAge} chronologicalAge={chronologicalAge} />
+                    <AgingClock name="Epigenetic Clock" biologicalAge={epigeneticClockAge} chronologicalAge={chronologicalAge} />
+                    <AgingClock name="Functional Clock" biologicalAge={functionalClockAge} chronologicalAge={chronologicalAge} />
+                </div>
             </div>
 
             <div className="flex-grow bg-black/20 rounded-lg flex flex-col overflow-hidden border border-slate-800 mt-4">

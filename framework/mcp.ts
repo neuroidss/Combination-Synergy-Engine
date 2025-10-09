@@ -1,7 +1,10 @@
-// framework/mcp.ts
+// DESIGN NOTE: The framework should only contain generic, reusable building blocks.
+// Application-specific tools, even for bootstrapping services, belong with the application's
+// own tool definitions. The framework provides the primitives (like starting processes or writing files),
+// not the specific implementation of services.
 import type { ToolCreatorPayload } from '../types';
 
-const MCP_TOOL_DEFINITIONS: ToolCreatorPayload[] = [
+export const SERVER_MANAGEMENT_TOOLS: ToolCreatorPayload[] = [
     {
         name: 'Server File Writer',
         description: "Creates or overwrites a file on the server's filesystem. Path is relative to the specified base directory.",
@@ -31,36 +34,6 @@ const MCP_TOOL_DEFINITIONS: ToolCreatorPayload[] = [
           }
           
           return { success: true, ...result };
-        `,
-    },
-    {
-        name: 'Read Webpage Content',
-        description: "Fetches the full, cleaned text content of a given public URL using the AI's built-in, serverless web browsing capabilities.",
-        category: 'Functional',
-        executionEnvironment: 'Client',
-        purpose: "To provide the AI with the fundamental ability to 'read' the content of webpages, enabling deeper analysis than search snippets allow, without requiring a local server.",
-        parameters: [
-            { name: 'url', type: 'string', description: 'The full URL of the webpage to read.', required: true },
-        ],
-        implementationCode: `
-          // This tool now exclusively uses the client-side AI's search capability, removing the server dependency.
-          runtime.logEvent('[Web Reader] Using client-side AI search to read URL.');
-          try {
-              const searchPrompt = \`Use your search capabilities to find the scientific article at the URL "\${args.url}" and provide a comprehensive summary of its content. The summary must be detailed and based on the article's actual content, covering its main findings, methods, and conclusions.\`;
-              const searchResult = await runtime.ai.search(searchPrompt);
-              
-              if (!searchResult || !searchResult.summary) {
-                  throw new Error("The AI search did not return a summary for the URL.");
-              }
-
-              // The client-side approach returns a summary, which is sufficient for the subsequent verification steps.
-              // We map it to the 'textContent' property to maintain a consistent data structure.
-              return { success: true, textContent: searchResult.summary };
-
-          } catch (e) {
-              const errorMessage = e instanceof Error ? e.message : String(e);
-              throw new Error(\`Client-side web reading failed: \${errorMessage}\`);
-          }
         `,
     },
     {
@@ -107,32 +80,4 @@ const MCP_TOOL_DEFINITIONS: ToolCreatorPayload[] = [
         parameters: [],
         implementationCode: 'list_managed_processes'
     }
-];
-
-const MCP_INSTALLER_TOOL: ToolCreatorPayload = {
-    name: 'Install MCP Suite',
-    description: 'Installs the core tools for managing Master Control Program (MCP) server processes.',
-    category: 'Automation',
-    executionEnvironment: 'Client',
-    purpose: "To bootstrap the agent's ability to manage its own backend microservices.",
-    parameters: [],
-    implementationCode: `
-        runtime.logEvent('[INFO] Installing MCP Suite...');
-        const toolPayloads = ${JSON.stringify(MCP_TOOL_DEFINITIONS)};
-        const existing = new Set(runtime.tools.list().map(t => t.name));
-        for (const payload of toolPayloads) {
-            if (existing.has(payload.name)) continue;
-            try { await runtime.tools.run('Tool Creator', payload); }
-            catch (e) { runtime.logEvent(\`[WARN] Failed to create '\${payload.name}': \${e.message}\`); }
-        }
-        if (runtime.isServerConnected()) { await runtime.forceRefreshServerTools(); }
-        return { success: true, message: 'MCP Suite installed.' };
-    `
-};
-
-export const MCP_TOOLS: ToolCreatorPayload[] = [
-    MCP_INSTALLER_TOOL,
-    // The core 'Read Webpage Content' tool is now moved here from the deleted server files,
-    // as it's a fundamental capability required by the client-side agent.
-    ...MCP_TOOL_DEFINITIONS
 ];
