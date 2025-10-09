@@ -12,8 +12,6 @@ const getGeminiInstance = (apiKey: string): GoogleGenAI => {
     return geminiInstances.get(apiKey)!;
 };
 
-// FIX: Sanitize tool names to comply with Gemini API requirements (alphanumeric, underscores, dashes).
-// This prevents errors caused by spaces or other special characters in tool names like "Task Complete".
 const sanitizeToolName = (name: string): string => {
     return name.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
@@ -23,8 +21,6 @@ const mapTypeToGemini = (type: LLMTool['parameters'][0]['type']): Type => {
         case 'string': return Type.STRING;
         case 'number': return Type.NUMBER;
         case 'boolean': return Type.BOOLEAN;
-        // FIX: Objects and arrays are mapped to STRING to ask the model for a JSON string,
-        // avoiding complex schema validation issues for arrays of objects.
         case 'array': return Type.STRING;
         case 'object': return Type.STRING;
         default: return Type.STRING;
@@ -33,7 +29,6 @@ const mapTypeToGemini = (type: LLMTool['parameters'][0]['type']): Type => {
 
 const buildGeminiTools = (tools: LLMTool[]): FunctionDeclaration[] => {
     return tools.map(tool => ({
-        // FIX: Use the sanitized tool name for the API call.
         name: sanitizeToolName(tool.name),
         description: tool.description,
         parameters: {
@@ -42,8 +37,6 @@ const buildGeminiTools = (tools: LLMTool[]): FunctionDeclaration[] => {
                 const isComplexType = param.type === 'array' || param.type === 'object';
                 obj[param.name] = {
                     type: mapTypeToGemini(param.type),
-                    // FIX: If the type is complex, instruct the model to provide a JSON string.
-                    // This resolves schema errors like "items: missing field" for arrays.
                     description: isComplexType 
                         ? `${param.description} (This argument must be a valid, JSON-formatted string.)`
                         : param.description,
@@ -82,7 +75,6 @@ export const generateWithTools = async (
     const ai = getGeminiInstance(apiKey);
     const geminiTools = buildGeminiTools(tools);
     
-    // FIX: Create a map to convert sanitized names from the API response back to their original format.
     const toolNameMap = new Map(tools.map(t => [sanitizeToolName(t.name), t.name]));
 
     const response: GenerateContentResponse = await ai.models.generateContent({
@@ -95,10 +87,8 @@ export const generateWithTools = async (
     });
 
     const toolCalls: AIToolCall[] | null = response.functionCalls?.map(fc => {
-        // FIX: Use the map to find the original tool name.
         const originalName = toolNameMap.get(fc.name) || fc.name;
         
-        // FIX: Robustly parse arguments that are expected to be JSON strings.
         const toolDefinition = tools.find(t => t.name === originalName);
         const parsedArgs = { ...fc.args };
         if (toolDefinition) {

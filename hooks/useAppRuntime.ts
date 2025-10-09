@@ -6,15 +6,14 @@ import { useToolManager } from './useToolManager';
 import { useToolRelevance } from './useToolRelevance';
 import { useSwarmManager } from './useSwarmManager';
 import * as aiService from '../services/aiService';
-// FIX: Import ExecuteActionFunction to correctly type the ref and its assignment.
-import type { AIToolCall, EnrichedAIResponse, LLMTool, MainView, ToolCreatorPayload, ExecuteActionFunction } from '../types';
+import * as searchService from '../services/searchService';
+import type { AIToolCall, EnrichedAIResponse, LLMTool, MainView, ToolCreatorPayload, ExecuteActionFunction, SearchResult } from '../types';
 
 export const useAppRuntime = () => {
     const stateManager = useAppStateManager();
     const toolManager = useToolManager({ logEvent: stateManager.logEvent });
     const { findRelevantTools } = useToolRelevance({ allTools: toolManager.allTools, logEvent: stateManager.logEvent });
 
-    // FIX: The ref type is updated to ExecuteActionFunction to match the type expected by useSwarmManager.
     const executeActionRef = useRef<ExecuteActionFunction | null>(null);
 
     const swarmManager = useSwarmManager({
@@ -67,6 +66,12 @@ export const useAppRuntime = () => {
             },
             list: () => toolManager.allTools,
         },
+        search: {
+            pubmed: (query: string, limit: number) => searchService.searchPubMed(query, stateManager.logEvent, limit),
+            biorxiv: (query: string, limit: number) => searchService.searchBioRxivPmcArchive(query, stateManager.logEvent, limit),
+            patents: (query: string, limit: number) => searchService.searchGooglePatents(query, stateManager.logEvent, limit),
+            enrichSource: (source: SearchResult) => searchService.enrichSource(source, stateManager.logEvent),
+        },
         ai: {
             generateText: (text: string, systemInstruction: string, files: {name: string, type: string, data: string}[] = []) => {
                 stateManager.setApiCallCount(prev => ({ ...prev, [stateManager.selectedModel.id]: (prev[stateManager.selectedModel.id] || 0) + 1 }));
@@ -74,7 +79,6 @@ export const useAppRuntime = () => {
             },
             search: (text: string) => {
                  stateManager.setApiCallCount(prev => ({ ...prev, [stateManager.selectedModel.id]: (prev[stateManager.selectedModel.id] || 0) + 1 }));
-                 // FIX: Added the missing `stateManager.selectedModel` argument to the `contextualizeWithSearch` call.
                  return aiService.contextualizeWithSearch({text, files: []}, stateManager.apiConfig, stateManager.selectedModel);
             }
         },
@@ -82,8 +86,6 @@ export const useAppRuntime = () => {
         clearObservationHistory: () => {}, // Placeholder
     }), [stateManager, toolManager]);
 
-    // FIX: The executeAction function is now created with useMemo to construct a callable object
-    // that includes the `getRuntimeApiForAgent` property, satisfying the `ExecuteActionFunction` type.
     const executeAction = useMemo<ExecuteActionFunction>(() => {
         const fn = async (
             toolCall: AIToolCall,
@@ -123,8 +125,6 @@ export const useAppRuntime = () => {
     return {
         ...stateManager,
         ...toolManager,
-        // FIX: The swarmManager hook now returns a flat object. Spreading it directly provides all its state and handlers to the runtime.
-        // This resolves a complex type inference issue where TypeScript incorrectly inferred the hook's return type as void.
         ...swarmManager,
         runtimeApi,
         getTool,

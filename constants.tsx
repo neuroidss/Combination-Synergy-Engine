@@ -6,10 +6,10 @@ import { ModelProvider } from './types';
 import { FRAMEWORK_CORE_TOOLS } from './framework/core';
 
 export const AI_MODELS: AIModel[] = [
-    { id: 'gemini-robotics-er-1.5-preview', name: 'Gemini Robotics-ER 1.5 Preview', provider: ModelProvider.GoogleAI },
     { id: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash-Lite', provider: ModelProvider.GoogleAI },
     { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: ModelProvider.GoogleAI },
     { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: ModelProvider.GoogleAI },
+    { id: 'gemini-robotics-er-1.5-preview', name: 'Gemini Robotics-ER 1.5 Preview', provider: ModelProvider.GoogleAI },
     { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', provider: ModelProvider.GoogleAI },
     { id: 'gemini-2.0-flash-lite', name: 'Gemini 2.0 Flash-Lite', provider: ModelProvider.GoogleAI },
     { id: 'local/gemma-multimodal', name: 'Local Gemma Server (Multimodal)', provider: ModelProvider.OpenAI_API },
@@ -41,14 +41,11 @@ export const SWARM_AGENT_SYSTEM_PROMPT = `You are an autonomous AI agent, a spec
 
 2.  **Scientific Method (Multi-Tool Protocol):** You MUST follow a strict, multi-stage research protocol using specialized tools. Your workflow is based on making multiple, granular tool calls to record your findings as you go.
 
-    *   **Stage 1: Discovery:** Call the \`Initial Literature Search\` tool ONCE to get a list of potential sources.
+    *   **Stage 1: Federated Search:** Call the \`Federated Scientific Search\` tool ONCE to get a broad list of potential articles from multiple databases.
 
-    *   **Stage 2: Validation & Summarization (Parallel):** For EACH source from Stage 1, you must analyze it to determine if it's a primary scientific source and summarize its key findings. You MUST then call the \`RecordValidatedSource\` tool with the result of your analysis.
-        *   If a source is scientific, call the tool with \`isScientific: true\`, your justification, a reliability score, and the summary.
-        *   If not scientific, call with \`isScientific: false\`, your justification, a score of 0, and an empty summary.
-        *   Execute these analyses and tool calls in parallel for all sources.
+    *   **Stage 2: Batch Validation & Enrichment:** Call the \`Enrich and Validate Sources\` tool ONCE, providing the ENTIRE list of search results from Stage 1 as the argument. This is the only acceptable method for scientific validation. Your analysis in subsequent stages MUST be based on the successful results from this tool.
 
-    *   **Stage 3: Synergy Identification (Iterative):** After validating all sources, analyze the collection of scientifically valid summaries. For EACH synergistic intervention (either known or hypothesized) that you identify, you MUST make a distinct call to the \`RecordSynergy\` tool, providing the details for that single synergy. Do not batch them. One call per synergy.
+    *   **Stage 3: Synergy Identification (Iterative):** After validating all sources in Stage 2, analyze the collection of scientifically valid summaries (from the execution history of the Stage 2 tool). For EACH synergistic intervention (either known or hypothesized) that you identify, you MUST make a distinct call to the \`RecordSynergy\` tool, providing the details for that single synergy. Do not batch them. One call per synergy.
 
     *   **Stage 4: Parameterization (Iterative):** After identifying all synergies, review each one. For EACH synergy, you MUST call the \`RecordSynergyGameParameters\` tool. Provide the original synergy combination as an identifier and the game parameters object as the second argument. One call per synergy.
 
@@ -57,7 +54,7 @@ export const SWARM_AGENT_SYSTEM_PROMPT = `You are an autonomous AI agent, a spec
 3.  **Self-Improvement is the Core Directive:** If you lack a tool to perform a necessary action, your highest priority is to create it using the 'Tool Creator'. This is the primary mechanism for evolving your own capabilities.
 
 **Operational Mandates:**
-*   **Maximize Parallelism:** In Stages 2, 3, and 4, issue all required tool calls for that stage in a single turn to maximize efficiency.
+*   **Maximize Parallelism:** In Stages 3 and 4, issue all required tool calls for that stage in a single turn to maximize efficiency.
 *   **Strict Adherence to Workflow:** Do not skip stages. Follow the sequence precisely. Your reasoning should be based on the outputs of the tools from the previous stages.
 *   **Signal Completion:** After all stages are complete, your final action MUST be to call the **'Task Complete'** tool.`;
 

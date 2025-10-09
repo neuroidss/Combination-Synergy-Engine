@@ -64,6 +64,7 @@ export const useToolManager = ({ logEvent }: { logEvent: (message: string) => vo
     const [serverTools, setServerTools] = useState<LLMTool[]>([]);
     const [isServerConnected, setIsServerConnected] = useState<boolean>(false);
     const isServerConnectedRef = useRef(isServerConnected);
+    const initialServerCheckCompleted = useRef(false);
     isServerConnectedRef.current = isServerConnected;
 
     useEffect(() => {
@@ -151,7 +152,8 @@ export const useToolManager = ({ logEvent }: { logEvent: (message: string) => vo
                 setIsServerConnected(false);
                 logEvent('[WARN] ⚠️ Server connection lost during refresh.');
             }
-            throw error;
+            // Return a failure state instead of throwing, making it more resilient.
+            return { success: false, error: (error as Error).message };
         }
     }, [logEvent]);
 
@@ -169,9 +171,8 @@ export const useToolManager = ({ logEvent }: { logEvent: (message: string) => vo
     useEffect(() => {
         const fetchServerStatusAndTools = async () => {
             try {
-                // Use AbortController for fetch timeout
                 const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 3000); // 3-second timeout
+                const timeoutId = setTimeout(() => controller.abort(), 3000);
                 
                 const response = await fetch('http://localhost:3001/api/tools', { signal: controller.signal });
                 clearTimeout(timeoutId);
@@ -179,9 +180,8 @@ export const useToolManager = ({ logEvent }: { logEvent: (message: string) => vo
                 if (response.ok) {
                     const fetchedTools: LLMTool[] = await response.json();
                     setServerTools(currentServerTools => {
-                        // Avoid unnecessary state updates and log spam if the tools haven't changed.
                         if (JSON.stringify(currentServerTools) !== JSON.stringify(fetchedTools)) {
-                            if (isServerConnectedRef.current) { // Only log updates if already connected
+                            if (isServerConnectedRef.current) {
                                 logEvent(`[SYSTEM] Server tools updated via polling. Found ${fetchedTools.length} tools.`);
                             }
                             return fetchedTools;
@@ -190,7 +190,7 @@ export const useToolManager = ({ logEvent }: { logEvent: (message: string) => vo
                     });
                     if (!isServerConnectedRef.current) {
                         setIsServerConnected(true);
-                        logEvent('[INFO] ✅ Server connection established.');
+                        logEvent('[INFO] ✅ Optional server connection established.');
                     }
                 } else {
                     throw new Error(`Server responded with status: ${response.status}`);
@@ -199,13 +199,17 @@ export const useToolManager = ({ logEvent }: { logEvent: (message: string) => vo
                 setServerTools([]);
                 if (isServerConnectedRef.current) {
                     setIsServerConnected(false);
-                    logEvent('[WARN] ⚠️ Server connection lost.');
+                    logEvent('[WARN] ⚠️ Optional server connection lost.');
+                } else if (!initialServerCheckCompleted.current) {
+                    logEvent('[INFO] Optional backend server not found. Running in client-only mode.');
                 }
+            } finally {
+                initialServerCheckCompleted.current = true;
             }
         };
 
-        fetchServerStatusAndTools(); // Initial check
-        const intervalId = setInterval(fetchServerStatusAndTools, 5000); // Poll every 5 seconds
+        fetchServerStatusAndTools();
+        const intervalId = setInterval(fetchServerStatusAndTools, 10000); // Poll every 10 seconds
 
         return () => clearInterval(intervalId);
     }, [logEvent]);
@@ -217,6 +221,6 @@ export const useToolManager = ({ logEvent }: { logEvent: (message: string) => vo
         allToolsRef,
         isServerConnected,
         generateMachineReadableId,
-        forceRefreshServerTools, // Expose the manual refresh function
+        forceRefreshServerTools,
     };
 };

@@ -95,3 +95,35 @@ export interface ScoredTool {
 }
 
 export type ToolRelevanceMode = 'Embeddings' | 'All' | 'LLM';
+
+export enum SearchDataSource {
+    PubMed = 'PubMed',
+    BioRxivPmcArchive = 'BioRxivPmcArchive',
+    GooglePatents = 'GooglePatents',
+}
+
+export interface SearchResult {
+    title: string;
+    link: string;
+    snippet: string;
+    source: SearchDataSource;
+}
+
+export type SourceStatus = 'unverified' | 'valid' | 'invalid' | 'validating' | 'fetch-failed';
+
+export interface GroundingSource {
+    uri: string;
+    title: string;
+    status: SourceStatus;
+    origin: SearchDataSource;
+    content?: string;
+    reliability?: number; // 0.0 to 1.0, assessed by AI
+    reliabilityJustification?: string; // AI's reason for the score
+    reason?: string; // Reason for status (e.g., fetch failure, invalid)
+}
+
+export interface ValidatedSource {
+    uri: string;
+    status: 'valid' | 'invalid';
+    reason: string;
+}

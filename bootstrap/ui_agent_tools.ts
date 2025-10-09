@@ -1,4 +1,3 @@
-
 import type { ToolCreatorPayload } from '../types';
 
 export const SYNERGY_FORGE_TOOLS: ToolCreatorPayload[] = [{
@@ -221,24 +220,31 @@ React.useEffect(() => {
 React.useEffect(() => {
     if (!isSwarmRunning && lastSwarmRunHistory) {
         const history = lastSwarmRunHistory;
-        const taskComplete = history.some(h => h.tool?.name === 'Task Complete' && !h.executionError);
-        if (taskComplete) {
-            const sources = history.filter(h => h.tool?.name === 'RecordValidatedSource' && h.executionResult?.validatedSource?.isScientific).map(h => h.executionResult.validatedSource);
-            let synergiesData = history.filter(h => h.tool?.name === 'RecordSynergy' && h.executionResult?.synergy).map(h => h.executionResult.synergy);
-            const gameParamsMap = new Map();
-            history.filter(h => h.tool?.name === 'RecordSynergyGameParameters' && h.executionResult?.synergyCombination).forEach(h => {
-                const key = h.executionResult.synergyCombination.join(' + ');
-                gameParamsMap.set(key, h.executionResult.gameParameters);
-            });
-            const finalSynergies = synergiesData.map(syn => ({ ...syn, gameParameters: gameParamsMap.get(syn.combination.join(' + ')) || null }));
-            const finalDossiers = history.filter(h => h.tool?.name === 'RecordTrialDossier').map(h => h.executionResult.dossier);
-            
-            setResearchHistory(sources);
-            setSynergies(finalSynergies);
-            setDossiers(finalDossiers);
 
-            if (finalDossiers.length > 0) setCurrentTab('proposals');
-            else if (finalSynergies.length > 0) setCurrentTab('synergies');
+        const enrichAndValidateStep = history.find(h => h.tool?.name === 'Enrich and Validate Sources' && h.executionResult?.success);
+        const sources = enrichAndValidateStep ? (enrichAndValidateStep.executionResult.validatedSources || []) : [];
+
+        const synergiesData = history.filter(h => h.tool?.name === 'RecordSynergy' && h.executionResult?.synergy).map(h => h.executionResult.synergy);
+        const gameParamsMap = new Map();
+        history.filter(h => h.tool?.name === 'RecordSynergyGameParameters' && h.executionResult?.synergyCombination).forEach(h => {
+            const key = h.executionResult.synergyCombination.join(' + ');
+            gameParamsMap.set(key, h.executionResult.gameParameters);
+        });
+        const finalSynergies = synergiesData.map(syn => ({ ...syn, gameParameters: gameParamsMap.get(syn.combination.join(' + ')) || null }));
+        const finalDossiers = history.filter(h => h.tool?.name === 'RecordTrialDossier').map(h => h.executionResult.dossier);
+
+        // Since the start handlers clear state, we just populate the new results here.
+        setResearchHistory(sources);
+        setSynergies(finalSynergies);
+        setDossiers(finalDossiers);
+
+        // Switch to the most relevant tab to show the user what was generated.
+        if (finalDossiers.length > 0) {
+            setCurrentTab('proposals');
+        } else if (finalSynergies.length > 0) {
+            setCurrentTab('synergies');
+        } else if (sources.length > 0) {
+            setCurrentTab('sources');
         }
     }
 }, [isSwarmRunning, lastSwarmRunHistory]);
@@ -250,11 +256,11 @@ React.useEffect(() => {
     if (isSwarmRunning && eventLog && eventLog.length > 0) {
         const lastLog = eventLog[eventLog.length - 1] || '';
         let status = 'Agent is working...';
-        if (lastLog.includes('[Dossier]')) status = 'Stage 6: Generating investment dossiers...';
-        else if (lastLog.includes('Recording result for:')) status = 'Stage 2: Validating & summarizing sources...';
+        if (lastLog.includes('Generating investment dossiers')) status = 'Stage 6: Generating investment dossiers...';
+        else if (lastLog.includes('Verifying sources') || lastLog.includes('Enrichment complete')) status = 'Stage 2: Verifying sources...';
         else if (lastLog.includes('Recording synergy:')) status = 'Stage 3: Identifying synergies...';
         else if (lastLog.includes('Recording parameters for:')) status = 'Stage 4: Generating game parameters...';
-        else if (lastLog.includes('[Search]')) status = 'Stage 1: Searching for literature...';
+        else if (lastLog.includes('Starting federated search')) status = 'Stage 1: Searching for articles...';
         setAgentStatus(status);
     } else if (!isSwarmRunning) {
         if (researchHistory.length > 0 || synergies.length > 0) setAgentStatus('Research complete. Ready for new objective.');
@@ -271,22 +277,13 @@ const handleStart = () => {
     }
 };
 
-const handleGenerateDossiers = () => {
-    const dossierPrompt = 'Analyze the provided validated sources and identified synergies. Identify the top 2-3 most promising combinations for investment. For each, generate a comprehensive "Trial-Ready Combination Dossier" by calling the \\'RecordTrialDossier\\' tool. The dossier must be thorough, credible, and compelling for a business audience, including a strong scientific rationale and market analysis. Base the \\'inSilicoValidation\\' section on the provided summaries and known mechanisms of action.';
-    const fullTask = {
-      isScripted: false,
-      userRequest: {
-        text: dossierPrompt,
-        files: [],
-      },
-      contextualData: {
-        sources: researchHistory,
-        synergies: synergies,
-      },
-    };
-    startSwarmTask({ task: fullTask, systemPrompt: null, allTools: runtime.tools.list() });
+const handleStartProposalGeneration = () => {
+    const proposalTaskPrompt = 'Perform a full end-to-end analysis. First, discover and validate a broad range of longevity interventions from scientific literature. Second, analyze the validated findings to identify both known and novel synergistic combinations. Finally, based on this comprehensive research, identify the top 2-3 most promising combinations and generate a thorough "Trial-Ready Combination Dossier" for each by calling the appropriate tool. The entire process should be autonomous.';
+    setResearchHistory([]);
+    setSynergies([]);
+    setDossiers([]);
+    startSwarmTask({ task: proposalTaskPrompt, systemPrompt: null, allTools: runtime.tools.list() });
 };
-
 
 const applySynergy = (synergy) => {
     const params = synergy.gameParameters;
@@ -482,7 +479,7 @@ return (
             </div>
             <div className="flex flex-col gap-3 bg-black/30 p-4 rounded-lg border border-slate-800">
                 <label htmlFor="task-prompt" className="font-semibold text-slate-300">Research Objective:</label>
-                <textarea id="task-prompt" value={taskPrompt} onChange={(e) => setTaskPrompt(e.target.value)} className="w-full bg-slate-800 border border-slate-600 rounded-lg p-2 text-sm text-slate-200 resize-none focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500" rows={4} />
+                <textarea id="task-prompt" value={taskPrompt} onChange={(e) => setTaskPrompt(e.target.value)} className="w-full bg-slate-800 border border-slate-600 rounded-lg p-2 text-sm text-slate-200 resize-none focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500" rows={4} placeholder="Use this for the 'Begin Research' task..." />
                  <div>
                     <label htmlFor="model-selector" className="text-sm font-semibold text-slate-300">AI Model:</label>
                     <select 
@@ -541,7 +538,7 @@ return (
                             />
                         </div>
                     )}
-                    {selectedModel.provider === 'Ollama' && (
+                     {selectedModel.provider === 'Ollama' && (
                          <div>
                             <label htmlFor="ollama-host" className="text-xs font-semibold text-slate-300">Ollama Host URL:</label>
                             <input
@@ -558,9 +555,14 @@ return (
                         <p className="text-xs text-slate-500 text-center pt-1">API keys are stored locally in your browser.</p>
                     }
                 </div>
-                 <button onClick={handleStart} disabled={isSwarmRunning || !taskPrompt.trim()} className="mt-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold py-2 px-4 rounded-lg disabled:from-slate-700 disabled:to-slate-600 disabled:text-slate-400 disabled:cursor-not-allowed transition-all">
-                    {isSwarmRunning ? 'Research in Progress...' : 'Begin Research'}
-                </button>
+                <div className="mt-2 flex gap-2">
+                     <button onClick={handleStart} disabled={isSwarmRunning || !taskPrompt.trim()} className="flex-1 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold py-2 px-4 rounded-lg disabled:from-slate-700 disabled:to-slate-600 disabled:text-slate-400 disabled:cursor-not-allowed transition-all">
+                        {isSwarmRunning ? 'Working...' : 'Begin Research'}
+                    </button>
+                    <button onClick={handleStartProposalGeneration} disabled={isSwarmRunning} className="flex-1 bg-gradient-to-r from-amber-600 to-yellow-600 hover:from-amber-500 hover:to-yellow-500 text-white font-bold py-2 px-4 rounded-lg disabled:from-slate-700 disabled:to-slate-600 disabled:text-slate-400 disabled:cursor-not-allowed transition-all">
+                        Generate Proposals
+                    </button>
+                </div>
             </div>
             <div className="flex-grow bg-black/20 rounded-lg flex flex-col overflow-hidden border border-slate-800">
                 <div className="flex-shrink-0 border-b border-slate-700">
@@ -582,13 +584,6 @@ return (
                         (currentTab === 'proposals' && dossiers.length === 0)
                      ) && <p className="text-slate-500 p-4 text-center">{agentStatus}</p>}
                 </div>
-                 {!isSwarmRunning && synergies.length > 0 && dossiers.length === 0 && (
-                    <div className="p-3 border-t border-slate-700">
-                        <button onClick={handleGenerateDossiers} disabled={isSwarmRunning} className="w-full bg-gradient-to-r from-amber-600 to-yellow-600 hover:from-amber-500 hover:to-yellow-500 text-white font-bold py-2 px-4 rounded-lg disabled:from-slate-700 disabled:to-slate-600 disabled:text-slate-400 disabled:cursor-not-allowed transition-all">
-                            Generate Investment Proposals
-                        </button>
-                    </div>
-                )}
             </div>
         </div>
 

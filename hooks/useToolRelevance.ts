@@ -6,17 +6,29 @@ import { CORE_TOOLS } from '../constants';
 import type { LLMTool, ScoredTool, MainView } from '../types';
 
 export const useToolRelevance = ({ allTools, logEvent }: { allTools: LLMTool[], logEvent: (msg: string) => void }) => {
-    const [toolEmbeddings, setToolEmbeddings] = useState<Map<string, number[]>>(new Map());
+    const toolEmbeddingsRef = useRef<Map<string, number[]>>(new Map());
     const isEmbeddingTools = useRef(false);
-    
-    // Using a ref to track initialization status to avoid re-runs and state dependency issues.
     const embeddingsInitialized = useRef(false);
 
     // This function ensures all tools are embedded before use. It's now called lazily.
-    const ensureToolEmbeddings = useCallback(async () => {
-        // Exit if already initialized, or if another process is already running.
-        if (embeddingsInitialized.current || isEmbeddingTools.current) {
-            return;
+    // It now returns the map of embeddings directly.
+    const ensureToolEmbeddings = useCallback(async (): Promise<Map<string, number[]>> => {
+        // Exit if already initialized.
+        if (embeddingsInitialized.current) {
+            return toolEmbeddingsRef.current;
+        }
+
+        // If another call is already running, wait for it to finish.
+        if (isEmbeddingTools.current) {
+            await new Promise<void>(resolve => {
+                const interval = setInterval(() => {
+                    if (!isEmbeddingTools.current) {
+                        clearInterval(interval);
+                        resolve();
+                    }
+                }, 100);
+            });
+            return toolEmbeddingsRef.current;
         }
         
         // Prevent concurrent runs.
@@ -39,9 +51,10 @@ export const useToolRelevance = ({ allTools, logEvent }: { allTools: LLMTool[], 
                 newEmbeddings.set(tool.id, embeddings[index]);
             });
 
-            setToolEmbeddings(newEmbeddings);
+            toolEmbeddingsRef.current = newEmbeddings; // Cache in the ref
             embeddingsInitialized.current = true; // Mark as initialized
             logEvent(`[Embeddings] Cache created successfully. Total embedded: ${allTools.length} tools.`);
+            return newEmbeddings;
 
         } catch (e) {
             const errorMsg = e instanceof Error ? e.message : String(e);
@@ -63,8 +76,8 @@ export const useToolRelevance = ({ allTools, logEvent }: { allTools: LLMTool[], 
         mainView: MainView | null = null
     ): Promise<ScoredTool[]> => {
         try {
-            // Lazily compute tool embeddings on the first call.
-            await ensureToolEmbeddings();
+            // Lazily compute tool embeddings on the first call and get the result directly.
+            const localToolEmbeddings = await ensureToolEmbeddings();
 
             let contextForEmbedding = "";
             
@@ -88,7 +101,7 @@ export const useToolRelevance = ({ allTools, logEvent }: { allTools: LLMTool[], 
             
             // Score all available tools against the context.
             const scoredTools = availableTools.map(tool => {
-                const toolEmbedding = toolEmbeddings.get(tool.id);
+                const toolEmbedding = localToolEmbeddings.get(tool.id); // Use the direct result
                 // If a tool somehow wasn't embedded (e.g., added dynamically after init), score it as 0.
                 if (!toolEmbedding) return { tool, score: 0 };
                 const score = cosineSimilarity(contextEmbedding, toolEmbedding);
@@ -125,7 +138,7 @@ export const useToolRelevance = ({ allTools, logEvent }: { allTools: LLMTool[], 
             logEvent(`[WARN] Tool relevance search failed: ${errorMsg}. Providing all available tools as a fallback.`);
             return availableTools.map(tool => ({ tool, score: 0 }));
         }
-    }, [toolEmbeddings, logEvent, ensureToolEmbeddings]);
+    }, [logEvent, ensureToolEmbeddings]);
 
     return { findRelevantTools };
 };

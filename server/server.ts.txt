@@ -190,6 +190,35 @@ app.post('/api/tools/create', async (req, res) => {
     }
 });
 
+app.post('/api/browse', async (req, res) => {
+    const { url } = req.body;
+    if (!url) {
+        return res.status(400).json({ error: 'URL is required.' });
+    }
+    try {
+        const response = await fetch(url, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36' }
+        });
+        if (!response.ok) {
+            throw new Error(`Failed to fetch URL with status: ${response.status}`);
+        }
+        const html = await response.text();
+        // Basic HTML stripping. A more robust solution might use a library like cheerio or jsdom.
+        const textContent = html
+            .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+            .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/\s\s+/g, ' ')
+            .trim();
+            
+        res.json({ success: true, textContent });
+    } catch (e) {
+        const error = e as Error;
+        console.error(`[Browse] Failed to browse URL ${url}:`, error.message);
+        res.status(500).json({ error: `Failed to retrieve or process content from URL. Reason: ${error.message}` });
+    }
+});
+
 app.post('/api/execute', async (req, res) => {
     const { name, arguments: args }: AIToolCall = req.body;
     if (!name) return res.status(400).json({ error: 'Tool name is required.' });

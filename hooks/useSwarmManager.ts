@@ -3,7 +3,6 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { SWARM_AGENT_SYSTEM_PROMPT, CORE_TOOLS } from '../constants';
 import { contextualizeWithSearch, filterToolsWithLLM } from '../services/aiService';
-// FIX: Removed 'KnowledgeGraph' from import as it is not an exported member of the types module.
 import type { AgentWorker, EnrichedAIResponse, AgentStatus, AIToolCall, LLMTool, ExecuteActionFunction, ScoredTool, MainView, ToolRelevanceMode, AIModel, APIConfig } from '../types';
 
 type UseSwarmManagerProps = {
@@ -34,6 +33,30 @@ export type StartSwarmTaskOptions = {
 type ScriptExecutionState = 'idle' | 'running' | 'paused' | 'finished' | 'error';
 type StepStatus = { status: 'pending' | 'completed' | 'error'; result?: any; error?: string };
 
+// Helper to stringify results for the agent's history prompt, avoiding excessively long text.
+const resultToString = (result: any): string => {
+    if (result === undefined || result === null) return 'No result.';
+
+    // Custom replacer to truncate long strings, especially summaries inside validatedSources
+    const replacer = (key: string, value: any) => {
+        if (key === 'implementationCode') return '[...code...]';
+        if (key === 'summary' && typeof value === 'string' && value.length > 200) {
+            return value.substring(0, 200) + '...';
+        }
+        return value;
+    };
+
+    const sanitizedResult = JSON.parse(JSON.stringify(result, replacer));
+    let str = JSON.stringify(sanitizedResult);
+
+    // Keep the total length limit as a final safeguard
+    if (str.length > 2000) { // Increased limit
+        str = str.substring(0, 2000) + '... (truncated overall)';
+    }
+    return str;
+};
+
+
 export const useSwarmManager = (props: UseSwarmManagerProps) => {
     const { 
         logEvent, setUserInput, setEventLog, setApiCallCount, findRelevantTools, mainView,
@@ -50,7 +73,7 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
     const [activeToolsForTask, setActiveToolsForTask] = useState<ScoredTool[]>([]);
     const [relevanceTopK, setRelevanceTopK] = useState<number>(25);
     const [relevanceThreshold, setRelevanceThreshold] = useState<number>(0.1);
-    const [relevanceMode, setRelevanceMode] = useState<ToolRelevanceMode>('Embeddings');
+    const [relevanceMode, setRelevanceMode] = useState<ToolRelevanceMode>('All');
     
     // --- Scripted Workflow State ---
     const [scriptExecutionState, setScriptExecutionState] = useState<ScriptExecutionState>('idle');
@@ -66,13 +89,8 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
     useEffect(() => { isRunningRef.current = isSwarmRunning; }, [isSwarmRunning]);
     useEffect(() => { agentSwarmRef.current = agentSwarm; }, [agentSwarm]);
 
-    // FIX: This effect is critical. It ensures that once isSwarmRunning is set to true (e.g., by startSwarmTask),
-    // the main execution loop (runSwarmCycle) is actually started. Without this, the UI would show "working" but no
-    // agent logic would ever run, resulting in zero API calls.
     useEffect(() => {
         if (isSwarmRunning && !isCycleInProgress.current) {
-            // Using requestAnimationFrame to ensure the state update from startSwarmTask has been rendered
-            // before the first cycle begins.
             requestAnimationFrame(() => (window as any).__runSwarmCycle());
         }
     }, [isSwarmRunning]);
@@ -87,7 +105,7 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
             const reasonText = reason ? `: ${reason}` : ' by user.';
             logEvent(`[INFO] 🛑 Task ${isPause ? 'paused' : 'stopped'}${reasonText}`);
             if (!isPause && swarmHistoryRef.current.length > 0) {
-                setLastSwarmRunHistory(swarmHistoryRef.current);
+                setLastSwarmRunHistory([...swarmHistoryRef.current]);
             }
         }
     }, [logEvent]);
@@ -190,7 +208,6 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
                      logEvent('🔎 Performing web search for additional context...');
                     try {
                         setApiCallCount(prev => ({ ...prev, [selectedModel.id]: (prev[selectedModel.id] || 0) + 1 }));
-                        // Fix: The call to contextualizeWithSearch was missing the required `apiConfig` argument.
                         const searchResult = await contextualizeWithSearch({ text: `Find technical data for this request: "${currentUserTask.userRequest.text}"`, files: currentUserTask.userRequest.files }, apiConfig, selectedModel);
                         if (searchResult.summary) {
                             const sourceList = searchResult.sources.map(s => `- ${s.title}: ${s.uri}`).join('\n');
@@ -199,8 +216,27 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
                         }
                     } catch (e) { logEvent(`[WARN] ⚠️ Web search failed: ${e instanceof Error ? e.message : String(e)}.`); }
                 }
-                const historyString = swarmHistoryRef.current.length > 0 ? `Actions performed:\n${swarmHistoryRef.current.map(r => `Action: ${r.toolCall?.name || 'Unknown'} - Result: ${r.executionError ? `FAILED (${r.executionError})` : `SUCCEEDED (${JSON.stringify(r.executionResult?.message || r.executionResult?.stdout)}) `}`).join('\n')}` : "No actions performed yet.";
-                const promptForAgent = `Goal: "${finalUserRequestText}".\n\n${historyString}\n\nNext action? If goal is complete, call "Task Complete".`;
+
+                let contextualDataString = "";
+                if (currentUserTask.contextualData) {
+                    const { sources, synergies } = currentUserTask.contextualData;
+                    if (sources && sources.length > 0) {
+                        contextualDataString += `BACKGROUND: The following information has been previously gathered from validated scientific sources. You MUST use this as the basis for your analysis.\n${JSON.stringify(sources.map(s => ({ title: s.title, summary: s.summary, reliability: s.reliabilityScore })), null, 2)}\n\n`;
+                    }
+                    if (synergies && synergies.length > 0) {
+                        contextualDataString += `BACKGROUND: The following synergies have already been identified based on the sources above. You MUST use this as the basis for your analysis.\n${JSON.stringify(synergies, null, 2)}\n\n`;
+                    }
+                }
+
+                const historyString = swarmHistoryRef.current.length > 0
+                    ? `Actions performed so far:\n${swarmHistoryRef.current.map(r =>
+                        `Action: ${r.toolCall?.name || 'Unknown'} - Result: ${r.executionError
+                            ? `FAILED (${r.executionError})`
+                            : `SUCCEEDED. Output: ${resultToString(r.executionResult)}`}`
+                    ).join('\n')}`
+                    : "No actions have been performed yet.";
+
+                const promptForAgent = `${contextualDataString}CURRENT GOAL: "${finalUserRequestText}"\n\n${historyString}\n\nBased on the provided BACKGROUND information, your CURRENT GOAL, and the actions performed so far, what is the next single action to perform to advance the research protocol? If the goal is complete, you must call "Task Complete".`;
                 
                 let toolsForAgent: LLMTool[] = [];
                 if (relevanceMode === 'All') {
@@ -211,7 +247,6 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
                     toolsForAgent = relevantScoredTools.map(st => st.tool);
                 }
                 
-                // FIX: Ensure files property is an array to prevent runtime errors if currentUserTask.userRequest.files is undefined.
                 const promptPayload = { text: promptForAgent, files: currentUserTask.userRequest.files || [] };
                 if (!executeActionRef.current) throw new Error("Execution context is not available.");
                 const toolCalls = await processRequest(promptPayload, currentSystemPrompt, agent.id, toolsForAgent);
@@ -322,9 +357,6 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
         stepForward, stepBackward, runFromStep,
     };
 
-    // FIX: The hook's return value is refactored into a single flat object.
-    // This resolves a complex TypeScript inference issue where the nested {state, handlers}
-    // structure caused the compiler to incorrectly infer the hook's return type as `void`.
     return {
         ...state,
         ...handlers,

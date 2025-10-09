@@ -1,8 +1,3 @@
-// Fix: In the `totalCalls` calculation, `Object.values` on a generic record can return `unknown[]`. To fix the resulting error, the `sum` accumulator in the `reduce` function is now explicitly typed as `number`, ensuring that the addition operation is always performed on two numbers.
-
-
-
-
 import React, { useState, useEffect, useRef } from 'react';
 
 interface DebugLogViewProps {
@@ -24,7 +19,6 @@ const DebugLogView: React.FC<DebugLogViewProps> = ({ logs, onReset, apiCallCount
     }, [logs, isOpen]);
 
     const totalCalls = React.useMemo(() => 
-        // Fix: Explicitly typing the accumulator `sum` as a number prevents TS from incorrectly inferring it as `unknown` inside the reducer.
         Object.values(apiCallCounts || {}).reduce((sum: number, count) => sum + Number(count), 0), 
     [apiCallCounts]);
 

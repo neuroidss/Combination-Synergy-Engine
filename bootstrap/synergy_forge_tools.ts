@@ -2,62 +2,107 @@ import type { ToolCreatorPayload } from '../types';
 
 export const SYNERGY_FORGE_FUNCTIONAL_TOOLS: ToolCreatorPayload[] = [
     {
-        name: 'Initial Literature Search',
-        description: 'Performs a web search to find primary scientific sources for a given research query. Returns a raw list of potential sources for further validation.',
+        name: 'Federated Scientific Search',
+        description: 'Searches multiple scientific databases (PubMed, Google Patents, bioRxiv) for primary research articles related to a query. This is the mandatory first step of any research task.',
         category: 'Functional',
         executionEnvironment: 'Client',
-        purpose: 'To gather a broad list of potential scientific literature for the first stage of research.',
+        purpose: 'To gather a high-quality, broad list of potential scientific literature from trusted sources, which will then be rigorously verified.',
         parameters: [
             { name: 'query', type: 'string', description: 'The research topic to investigate (e.g., "synergistic effects of metformin and rapamycin on aging").', required: true },
+            { name: 'maxResultsPerSource', type: 'number', description: 'The maximum number of results to return from each data source (default: 5).', required: false },
         ],
         implementationCode: `
-            const { query } = args;
-            runtime.logEvent(\`[Search] Starting literature search for: "\${query}"\`);
+            const { query, maxResultsPerSource = 5 } = args;
+            runtime.logEvent(\`[Search] Starting federated search for: "\${query}"\`);
 
-            const searchResult = await runtime.ai.search(\`Find primary scientific literature and studies for: "\${query}"\`);
+            const searchPromises = [
+                runtime.search.pubmed(query, maxResultsPerSource),
+                runtime.search.biorxiv(query, maxResultsPerSource),
+                runtime.search.patents(query, maxResultsPerSource),
+            ];
+
+            const resultsBySource = await Promise.allSettled(searchPromises);
             
-            runtime.logEvent(\`[Search] Found \${searchResult.sources.length} potential sources.\`);
+            const allResults = [];
+            resultsBySource.forEach(result => {
+                if (result.status === 'fulfilled' && result.value) {
+                    allResults.push(...result.value);
+                }
+            });
 
-            if (searchResult.sources.length === 0) {
-                return { success: true, message: "No primary sources found.", potentialSources: [] };
-            }
+            const uniqueResults = Array.from(new Map(allResults.map(item => [item.link, item])).values());
+            
+            runtime.logEvent(\`[Search] Federated search complete. Found \${uniqueResults.length} unique potential sources.\`);
 
             return {
                 success: true,
-                message: \`Found \${searchResult.sources.length} potential sources.\`,
-                potentialSources: searchResult.sources.map(s => ({ title: s.title, url: s.uri })),
-            }
+                message: \`Found \${uniqueResults.length} potential articles.\`,
+                searchResults: uniqueResults,
+            };
         `,
     },
     {
-        name: 'RecordValidatedSource',
-        description: 'Records the validation status, reliability, and summary of a single scientific source. This tool is called after the agent has analyzed a source.',
+        name: 'Enrich and Validate Sources',
+        description: 'Takes a list of search results, enriches them by fetching their content, then sends the batch to an AI for final validation, summarization, and reliability scoring. This is the mandatory second step.',
         category: 'Functional',
         executionEnvironment: 'Client',
-        purpose: 'To log the structured output of the validation and summarization step for a single source, avoiding fragile JSON parsing.',
+        purpose: 'To programmatically verify a batch of search results link to valid scientific articles and to extract summaries from the confirmed sources using a single, efficient AI call.',
         parameters: [
-            { name: 'source', type: 'object', description: 'The original source object being validated, including its "url" and "title".', required: true },
-            { name: 'isScientific', type: 'boolean', description: 'True if the source is a primary scientific article, false otherwise.', required: true },
-            { name: 'justification', type: 'string', description: 'A brief justification for the isScientific classification.', required: true },
-            { name: 'reliabilityScore', type: 'number', description: 'A score from 0.0 to 1.0 indicating the source\'s reliability.', required: true },
-            { name: 'summary', type: 'string', description: 'A concise summary of the source\'s key findings if it is scientific, otherwise an empty string.', required: true },
+            { name: 'searchResults', type: 'array', description: 'An array of search result objects, each containing a "title" and a "link".', required: true },
         ],
         implementationCode: `
-            const { source, isScientific, justification, reliabilityScore, summary } = args;
-            if (!source || !source.url) throw new Error("A valid source object with a URL is required.");
-            runtime.logEvent(\`[Validation] Recording result for: \${source.title || source.url}\`);
+            const { searchResults } = args;
+            if (!Array.isArray(searchResults) || searchResults.length === 0) {
+                return { success: true, validatedSources: [] };
+            }
             
-            // This tool's purpose is simply to return the structured data it was given.
-            // The AI agent does the analysis and calls this tool with the results.
+            runtime.logEvent(\`[Validator] Starting enrichment for \${searchResults.length} sources...\`);
+            const enrichmentPromises = searchResults.map(res => runtime.search.enrichSource(res));
+            const enrichedResults = await Promise.all(enrichmentPromises);
+            runtime.logEvent(\`[Validator] Enrichment complete. Sending \${enrichedResults.length} sources to AI for final validation.\`);
+
+            const validationContext = enrichedResults.map((res, i) => 
+                \`<PRIMARY_SOURCE \${i + 1}>\\n<TITLE>\${res.title}</TITLE>\\n<URL>\${res.link}</URL>\\n<SNIPPET>\\n\${res.snippet}\\n</SNIPPET>\\n</PRIMARY_SOURCE>\`
+            ).join('\\n\\n');
+
+            const systemInstruction = \`You are an expert research analyst. Your task is to analyze a list of primary scientific sources and for each one:
+1.  Summarize its core scientific claims.
+2.  Assess its reliability with a score from 0.0 to 1.0. Base this on the source type (peer-reviewed > preprint > patent) and content.
+Your output MUST be a single JSON object with a key "sources", which is an array of objects, each with "uri", "title", "summary", "reliability", and "reliabilityJustification".\`
+            
+            const validationPrompt = \`Based on the research query, please assess and summarize the following primary scientific sources.\\n\\n\${validationContext}\`;
+
+            const aiResponseText = await runtime.ai.generateText(validationPrompt, systemInstruction);
+            
+            let validationJson;
+            try {
+                const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
+                if (!jsonMatch) throw new Error("No JSON object found in the AI's validation response.");
+                validationJson = JSON.parse(jsonMatch[0]);
+            } catch (e) {
+                runtime.logEvent(\`[Validator] ❌ Error parsing batch validation JSON. AI Response: \${aiResponseText}\`);
+                throw new Error(\`Failed to parse the AI's batch validation response. Details: \${e.message}\`);
+            }
+
+            if (!validationJson.sources || !Array.isArray(validationJson.sources)) {
+                throw new Error("AI response did not contain a valid 'sources' array.");
+            }
+            
+            const validatedSources = validationJson.sources.map(s => ({
+                url: s.uri,
+                title: s.title,
+                isScientific: true,
+                summary: s.summary,
+                reliabilityScore: s.reliability,
+                justification: s.reliabilityJustification,
+            }));
+
+            runtime.logEvent(\`[Validator] ✅ Batch validation complete. AI validated \${validatedSources.length} sources.\`);
+
             return {
                 success: true,
-                validatedSource: {
-                    ...source,
-                    isScientific,
-                    justification,
-                    reliabilityScore,
-                    summary,
-                }
+                message: \`Batch validation complete. \${validatedSources.length} sources were validated.\`,
+                validatedSources: validatedSources,
             };
         `,
     },
