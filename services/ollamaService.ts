@@ -179,6 +179,7 @@ export const generateWithTools = async (
 
         const data = await response.json();
         const toolCallsData = data.message?.tool_calls;
+        const responseContent = data.message?.content;
         
         if (toolCallsData && Array.isArray(toolCallsData) && toolCallsData.length > 0) {
             const toolCalls: AIToolCall[] = toolCallsData.map(tc => {
@@ -204,21 +205,20 @@ export const generateWithTools = async (
                     arguments: parsedArgs
                 };
             }).filter(Boolean); // Filter out any potential nulls from parsing errors
-            return { toolCalls };
+            return { toolCalls, text: responseContent };
         }
         
         // Fallback: Check text content for a tool call
-        const responseContent = data.message?.content;
         if (responseContent) {
             console.log("[Ollama Service] No native tool call found. Attempting to parse from text content.");
             const parsedToolCalls = parseToolCallFromText(responseContent, toolNameMap);
             if (parsedToolCalls) {
                 console.log("[Ollama Service] Successfully parsed tool call from text.", parsedToolCalls);
-                return { toolCalls: parsedToolCalls };
+                return { toolCalls: parsedToolCalls, text: responseContent };
             }
         }
         
-        return { toolCalls: null };
+        return { toolCalls: null, text: responseContent };
 
     } catch (e) {
         throw generateDetailedError(e, ollamaHost);

@@ -1,6 +1,21 @@
 // framework/automation.ts
 import type { ToolCreatorPayload } from '../types';
 
+const ARCHITECTURAL_PRINCIPLE_RECORDER: ToolCreatorPayload = {
+    name: 'Core Architectural Principle: Multiple Tool Calls Over JSON',
+    description: '"For everything, make a tool. Do not generate JSON. The architecture is multiple tool calls." - This is the foundational rule for building robust, predictable agentic systems.',
+    category: 'Automation',
+    executionEnvironment: 'Client',
+    purpose: 'To permanently record and serve as a constant reminder of the core design philosophy. Its existence in the tool list ensures the principle is always present during agent operation and self-modification.',
+    parameters: [],
+    implementationCode: `
+      const principle = "For everything, make a tool. Do not generate JSON. The architecture is multiple tool calls.";
+      runtime.logEvent(\`[FRAMEWORK] Core architectural principle acknowledged: \${principle}\`);
+      return { success: true, message: 'This tool serves as a record of the core architectural principle and performs no operational action.' };
+    `
+};
+
+
 const WORKFLOW_CREATOR_TOOL: ToolCreatorPayload = {
     name: 'Workflow Creator',
     description: 'Creates a new, high-level "Automation" tool by combining a sequence of other tool calls into a single, reusable workflow. These workflows run on the client.',
@@ -87,6 +102,7 @@ const PROPOSE_SKILL_TOOL: ToolCreatorPayload = {
 };
 
 export const AUTOMATION_TOOLS: ToolCreatorPayload[] = [
+    ARCHITECTURAL_PRINCIPLE_RECORDER,
     WORKFLOW_CREATOR_TOOL,
     PROPOSE_SKILL_TOOL,
 ];

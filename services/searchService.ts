@@ -44,20 +44,24 @@ const fetchWithCorsFallback = async (url: string, logEvent: (message: string) =>
 
             if (!proxyResponse.ok) {
                 // If the proxy server responds with an error, we throw.
-                const errorData = await proxyResponse.json().catch(() => ({ error: 'Proxy returned non-JSON error response.' }));
-                throw new Error(`Local proxy service failed with status ${proxyResponse.status}: ${errorData.error || 'Unknown error'}`);
+                const errorText = await proxyResponse.text();
+                // Try to parse the error for a more specific message from the proxy's JSON response
+                try {
+                    const errorJson = JSON.parse(errorText);
+                    if (errorJson.error) {
+                        throw new Error(`Local proxy service failed with status ${proxyResponse.status}: ${errorJson.error}`);
+                    }
+                } catch(e) {
+                    // Fallback to raw text if not JSON
+                }
+                const truncatedErrorText = errorText.length > 500 ? errorText.substring(0, 500) + '...' : errorText;
+                throw new Error(`Local proxy service failed with status ${proxyResponse.status}: ${truncatedErrorText}`);
             }
 
-            const data = await proxyResponse.json();
-            if (data.success && data.htmlContent) {
-                logEvent(`[Fetch] Success with local Web Proxy MCP.`);
-                return new Response(data.htmlContent, {
-                    status: 200,
-                    headers: { 'Content-Type': 'text/html' },
-                });
-            }
-            // If the proxy reports success:false, we throw.
-            throw new Error(data.error || "Local proxy returned 'success: false' but no error message.");
+            // The proxy now returns the raw response from the target, just like a public proxy.
+            // No special handling is needed; just return the successful response.
+            logEvent(`[Fetch] Success with local Web Proxy MCP.`);
+            return proxyResponse;
 
         } catch (error) {
              // If we can't even connect to the proxy, we throw.
@@ -101,11 +105,11 @@ const fetchWithCorsFallback = async (url: string, logEvent: (message: string) =>
 
 const stripTags = (html: string) => html.replace(/<[^>]*>?/gm, '').trim();
 
-export const searchWeb = async (query: string, logEvent: (message: string) => void, limit: number): Promise<SearchResult[]> => {
+export const searchWeb = async (query: string, logEvent: (message: string) => void, limit: number, proxyUrl?: string): Promise<SearchResult[]> => {
     const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
     const results: SearchResult[] = [];
     try {
-        const response = await fetchWithCorsFallback(url, logEvent);
+        const response = await fetchWithCorsFallback(url, logEvent, proxyUrl);
         const htmlContent = await response.text();
         
         const parser = new DOMParser();
@@ -135,30 +139,61 @@ export const searchWeb = async (query: string, logEvent: (message: string) => vo
         });
         logEvent(`[Search.Web] Success via DuckDuckGo, found ${results.length} results.`);
     } catch (error) {
-        logEvent(`[Search.Web] Error: ${error}`);
+        const message = error instanceof Error ? error.message : String(error);
+        logEvent(`[Search.Web] Error: ${message}`);
+        // Re-throw to allow the caller (e.g., Federated Search) to know about the failure.
+        throw error;
     }
     return results.slice(0, limit);
 };
 
-export const searchPubMed = async (query: string, logEvent: (message: string) => void, limit: number): Promise<SearchResult[]> => {
+export const searchPubMed = async (query: string, logEvent: (message: string) => void, limit: number, sinceYear?: number, proxyUrl?: string): Promise<SearchResult[]> => {
     const results: SearchResult[] = [];
     try {
-        const specificQuery = `${query}[Title/Abstract]`;
-        const searchUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(specificQuery)}&retmode=json&sort=relevance&retmax=${limit}`;
+        let specificQuery = `${query}[Title/Abstract]`;
+        let dateFilter = '';
+        if (sinceYear) {
+            dateFilter = `&datetype=pdat&mindate=${sinceYear}`;
+        }
         
-        const searchResponse = await fetch(searchUrl);
-        if (!searchResponse.ok) throw new Error(`PubMed search failed with status ${searchResponse.status}`);
-        const searchData = await searchResponse.json();
-        const ids: string[] = searchData.esearchresult.idlist;
+        const searchUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(specificQuery)}&retmode=json&sort=relevance&retmax=${limit}${dateFilter}`;
+        
+        const searchResponse = await fetchWithCorsFallback(searchUrl, logEvent, proxyUrl);
+        if (!searchResponse.ok) {
+            const errorText = await searchResponse.text();
+            throw new Error(`PubMed search API returned status ${searchResponse.status}. Response: ${errorText.substring(0, 200)}`);
+        }
+        
+        let searchData;
+        try {
+            searchData = await searchResponse.json();
+        } catch(e) {
+            throw new Error(`PubMed search API returned non-JSON response.`);
+        }
+
+        const ids: string[] = searchData?.esearchresult?.idlist;
+        if (!ids) {
+            logEvent(`[Search.PubMed] WARN: API response did not contain an idlist. Assuming no results.`);
+            return [];
+        }
 
         if (ids && ids.length > 0) {
             const summaryUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id=${ids.join(',')}&retmode=json`;
-            const summaryResponse = await fetch(summaryUrl);
-             if (!summaryResponse.ok) throw new Error(`PubMed summary failed with status ${summaryResponse.status}`);
-            const summaryData = await summaryResponse.json();
+            const summaryResponse = await fetchWithCorsFallback(summaryUrl, logEvent, proxyUrl);
+            if (!summaryResponse.ok) {
+                const errorText = await summaryResponse.text();
+                throw new Error(`PubMed summary API returned status ${summaryResponse.status}. Response: ${errorText.substring(0, 200)}`);
+            }
+
+            let summaryData;
+            try {
+                summaryData = await summaryResponse.json();
+            } catch(e) {
+                throw new Error(`PubMed summary API returned non-JSON response.`);
+            }
             
             ids.forEach(id => {
-                const article = summaryData.result[id];
+                const article = summaryData?.result?.[id];
                 if (article) {
                     results.push({
                         link: `https://pubmed.ncbi.nlm.nih.gov/${id}/`,
@@ -171,33 +206,60 @@ export const searchPubMed = async (query: string, logEvent: (message: string) =>
              logEvent(`[Search.PubMed] Success via API, found ${results.length} results.`);
         }
     } catch (error) {
-        logEvent(`[Search.PubMed] Error: ${error}`);
+        const message = error instanceof Error ? error.message : String(error);
+        logEvent(`[Search.PubMed] Error: ${message}`);
+        throw error;
     }
     return results;
 };
 
-export const searchBioRxivPmcArchive = async (query: string, logEvent: (message: string) => void, limit: number): Promise<SearchResult[]> => {
+export const searchBioRxivPmcArchive = async (query: string, logEvent: (message: string) => void, limit: number, sinceYear?: number, proxyUrl?: string): Promise<SearchResult[]> => {
     const results: SearchResult[] = [];
     try {
         const processedQuery = query.split(/\s+/).filter(term => term.length > 2).join(' OR ');
         const enhancedQuery = `(("${query}") OR (${processedQuery})) AND biorxiv[journal]`;
-        const searchUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pmc&term=${encodeURIComponent(enhancedQuery)}&retmode=json&sort=relevance&retmax=${limit}`;
+        let dateFilter = '';
+        if (sinceYear) {
+            dateFilter = `&datetype=pdat&mindate=${sinceYear}`;
+        }
+        const searchUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pmc&term=${encodeURIComponent(enhancedQuery)}&retmode=json&sort=relevance&retmax=${limit}${dateFilter}`;
         
-        const searchResponse = await fetch(searchUrl);
-        if (!searchResponse.ok) throw new Error(`PMC search failed with status ${searchResponse.status}`);
+        const searchResponse = await fetchWithCorsFallback(searchUrl, logEvent, proxyUrl);
+        if (!searchResponse.ok) {
+             const errorText = await searchResponse.text();
+            throw new Error(`PMC search API returned status ${searchResponse.status}. Response: ${errorText.substring(0, 200)}`);
+        }
         
-        const searchData = await searchResponse.json();
-        const ids: string[] = searchData.esearchresult.idlist;
+        let searchData;
+        try {
+            searchData = await searchResponse.json();
+        } catch(e) {
+            throw new Error(`PMC search API returned non-JSON response.`);
+        }
+        const ids: string[] = searchData?.esearchresult?.idlist;
+
+        if (!ids) {
+            logEvent(`[Search.BioRxiv] WARN: API response did not contain an idlist. Assuming no results.`);
+            return [];
+        }
 
         if (ids && ids.length > 0) {
             const summaryUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pmc&id=${ids.join(',')}&retmode=json`;
-            const summaryResponse = await fetch(summaryUrl);
-            if (!summaryResponse.ok) throw new Error(`PMC summary failed with status ${summaryResponse.status}`);
+            const summaryResponse = await fetchWithCorsFallback(summaryUrl, logEvent, proxyUrl);
+            if (!summaryResponse.ok) {
+                const errorText = await summaryResponse.text();
+                throw new Error(`PMC summary API returned status ${summaryResponse.status}. Response: ${errorText.substring(0, 200)}`);
+            }
             
-            const summaryData = await summaryResponse.json();
+            let summaryData;
+            try {
+                summaryData = await summaryResponse.json();
+            } catch(e) {
+                throw new Error(`PMC summary API returned non-JSON response.`);
+            }
             
             ids.forEach(id => {
-                const article = summaryData.result[id];
+                const article = summaryData?.result?.[id];
                 if (article) {
                     const pmcId = article.articleids.find((aid: { idtype: string, value: string }) => aid.idtype === 'pmc')?.value;
                     const link = pmcId ? `https://www.ncbi.nlm.nih.gov/pmc/articles/${pmcId}/` : `https://pubmed.ncbi.nlm.nih.gov/${id}/`;
@@ -213,67 +275,17 @@ export const searchBioRxivPmcArchive = async (query: string, logEvent: (message:
             logEvent(`[Search.BioRxiv] Success via PMC API, found ${results.length} results.`);
         }
     } catch (error) {
-        logEvent(`[Search.BioRxiv] Error: ${error}`);
+        const message = error instanceof Error ? error.message : String(error);
+        logEvent(`[Search.BioRxiv] Error: ${message}`);
+        throw error;
     }
     return results;
 };
 
 
-export const searchGooglePatents = async (query: string, logEvent: (message: string) => void, limit: number): Promise<SearchResult[]> => {
-    const url = `https://patents.google.com/xhr/query?url=q%3D${encodeURIComponent(query)}`;
-    const results: SearchResult[] = [];
-    try {
-        const response = await fetchWithCorsFallback(url, logEvent);
-        const rawText = await response.text();
-        
-        let patentJsonText = rawText;
-        try {
-            // Check if the response is from a proxy like allorigins that wraps the content
-            const proxyData = JSON.parse(rawText);
-            if (proxyData && typeof proxyData.contents === 'string') {
-                patentJsonText = proxyData.contents;
-            } else if (proxyData && (proxyData.error || proxyData.status?.error)) {
-                 throw new Error(`Proxy service returned an error: ${proxyData.error || JSON.stringify(proxyData.status)}`);
-            }
-        } catch (e) {
-            // If it's not JSON, it could be the raw response or an HTML error page from the proxy.
-            if (rawText.trim().startsWith('<')) {
-                throw new Error("Proxy returned an HTML error page, not the expected JSON content.");
-            }
-            // If it's not JSON and not HTML, we assume it's the raw content from a direct fetch or a transparent proxy.
-        }
-
-        // Google XHR responses sometimes start with )]}' to prevent JSON hijacking.
-        const firstBraceIndex = patentJsonText.indexOf('{');
-        if (firstBraceIndex === -1) {
-            throw new Error(`No JSON object found in patent response. Content starts with: ${patentJsonText.substring(0, 150)}`);
-        }
-        
-        const jsonText = patentJsonText.substring(firstBraceIndex);
-        const data = JSON.parse(jsonText);
-        
-        const patents = data.results?.cluster?.[0]?.result || [];
-        patents.slice(0, limit).forEach((item: any) => {
-            if (item && item.patent) {
-                const patent = item.patent;
-                const inventors = (patent.inventor_normalized && Array.isArray(patent.inventor_normalized)) 
-                    ? stripTags(patent.inventor_normalized.join(', ')) 
-                    : 'N/A';
-
-                results.push({
-                    link: `https://patents.google.com/patent/${patent.publication_number}/en`,
-                    title: stripTags(patent.title || 'No Title'),
-                    snippet: `Inventor: ${inventors}. Pub Date: ${patent.publication_date || 'N/A'}`,
-                    source: 'GooglePatents' as SearchDataSource.GooglePatents
-                });
-            }
-        });
-         logEvent(`[Search.Patents] Success, found ${results.length} results.`);
-    } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        logEvent(`[Search.Patents] Error: ${message}`);
-    }
-    return results;
+export const searchGooglePatents = async (query: string, logEvent: (message: string) => void, limit: number, proxyUrl?: string): Promise<SearchResult[]> => {
+    logEvent('[Search.Patents] Google Patents search has been disabled due to frequent blocking by Google. This source will be skipped.');
+    return [];
 };
 
 // --- Source Content Enrichment ---
@@ -301,7 +313,7 @@ const extractDoi = (text: string): string | null => {
     return match ? match[1] : null;
 };
 
-export const enrichSource = async (source: SearchResult, logEvent: (message: string) => void, proxyUrl?: string): Promise<SearchResult> => {
+export const enrichSource = async (source: SearchResult, logEvent: (message: string) => void, proxyUrl?: string): Promise<SearchResult & { textContent?: string }> => {
     if (source.snippet?.startsWith('[DOI Found]') || source.snippet?.startsWith('Fetch failed')) {
         logEvent(`[Enricher] Skipping enrichment for ${source.link} as it appears to be already processed.`);
         return source;
@@ -330,6 +342,7 @@ export const enrichSource = async (source: SearchResult, logEvent: (message: str
                     link: `https://www.${server}.org/content/${article.doi}`,
                     title: article.title,
                     snippet: `[DOI Found] ${article.abstract}`,
+                    textContent: article.abstract, // Use abstract as content for API results
                 };
             } else {
                 throw new Error(`No valid article data found in API response for DOI ${doi}`);
@@ -429,6 +442,8 @@ export const enrichSource = async (source: SearchResult, logEvent: (message: str
         if (doiFound) {
             enrichedSnippet = `[DOI Found] ${enrichedSnippet}`;
         }
+        
+        const textContent = doc.body?.textContent?.replace(/\s\s+/g, ' ').trim() || '';
 
         if (abstract) {
             logEvent(`[Enricher] Successfully enriched snippet via HTML scraping for ${linkToSave}. DOI found: ${doiFound}`);
@@ -441,6 +456,7 @@ export const enrichSource = async (source: SearchResult, logEvent: (message: str
             link: linkToSave,
             title: enrichedTitle,
             snippet: enrichedSnippet,
+            textContent: textContent,
         };
 
     } catch (error) {

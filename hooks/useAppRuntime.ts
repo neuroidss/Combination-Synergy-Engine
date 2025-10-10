@@ -7,7 +7,7 @@ import { useToolRelevance } from './useToolRelevance';
 import { useSwarmManager } from './useSwarmManager';
 import * as aiService from '../services/aiService';
 import * as searchService from '../services/searchService';
-import type { AIToolCall, EnrichedAIResponse, LLMTool, MainView, ToolCreatorPayload, ExecuteActionFunction, SearchResult } from '../types';
+import type { AIToolCall, EnrichedAIResponse, LLMTool, MainView, ToolCreatorPayload, ExecuteActionFunction, SearchResult, AIModel } from '../types';
 
 export const useAppRuntime = () => {
     const stateManager = useAppStateManager();
@@ -41,6 +41,12 @@ export const useAppRuntime = () => {
         logEvent: stateManager.logEvent,
         isServerConnected: () => toolManager.isServerConnected,
         forceRefreshServerTools: toolManager.forceRefreshServerTools,
+        // This is a new addition to expose read-only state to tools that need it.
+        // It's a function to prevent stale closures.
+        getState: () => ({
+            selectedModel: stateManager.selectedModel,
+            apiConfig: stateManager.apiConfig,
+        }),
         tools: {
             run: async (toolName: string, args: Record<string, any>): Promise<any> => {
                 if (!executeActionRef.current) {
@@ -73,16 +79,21 @@ export const useAppRuntime = () => {
             list: () => toolManager.allTools,
         },
         search: {
-            pubmed: (query: string, limit: number) => searchService.searchPubMed(query, stateManager.logEvent, limit),
-            biorxiv: (query: string, limit: number) => searchService.searchBioRxivPmcArchive(query, stateManager.logEvent, limit),
-            patents: (query: string, limit: number) => searchService.searchGooglePatents(query, stateManager.logEvent, limit),
-            web: (query: string, limit: number) => searchService.searchWeb(query, stateManager.logEvent, limit),
+            pubmed: (query: string, limit: number, sinceYear?: number, proxyUrl?: string) => searchService.searchPubMed(query, stateManager.logEvent, limit, sinceYear, proxyUrl),
+            biorxiv: (query: string, limit: number, sinceYear?: number, proxyUrl?: string) => searchService.searchBioRxivPmcArchive(query, stateManager.logEvent, limit, sinceYear, proxyUrl),
+            patents: (query: string, limit: number, proxyUrl?: string) => searchService.searchGooglePatents(query, stateManager.logEvent, limit, proxyUrl),
+            web: (query: string, limit: number, proxyUrl?: string) => searchService.searchWeb(query, stateManager.logEvent, limit, proxyUrl),
             enrichSource: (source: SearchResult, proxyUrl?: string) => searchService.enrichSource(source, stateManager.logEvent, proxyUrl),
         },
         ai: {
             generateText: (text: string, systemInstruction: string, files: {name: string, type: string, data: string}[] = []) => {
                 stateManager.setApiCallCount(prev => ({ ...prev, [stateManager.selectedModel.id]: (prev[stateManager.selectedModel.id] || 0) + 1 }));
                 return aiService.generateTextFromModel({ text, files }, systemInstruction, stateManager.selectedModel, stateManager.apiConfig, stateManager.logEvent);
+            },
+            processRequest: (text: string, systemInstruction: string, tools: LLMTool[], files: {name: string, type: string, data: string}[] = [], modelOverride?: AIModel) => {
+                const modelToUse = modelOverride || stateManager.selectedModel;
+                stateManager.setApiCallCount(prev => ({ ...prev, [modelToUse.id]: (prev[modelToUse.id] || 0) + 1 }));
+                return aiService.processRequest({ text, files }, systemInstruction, 'tool-runtime', tools, modelToUse, stateManager.apiConfig);
             },
             search: (text: string) => {
                  stateManager.setApiCallCount(prev => ({ ...prev, [stateManager.selectedModel.id]: (prev[stateManager.selectedModel.id] || 0) + 1 }));

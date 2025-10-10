@@ -109,7 +109,7 @@ export const generateWithTools = async (
         };
     }) || null;
 
-    return { toolCalls };
+    return { toolCalls, text: response.text };
 };
 
 export const generateText = async (

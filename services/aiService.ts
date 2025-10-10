@@ -1,6 +1,6 @@
 // VIBE_NOTE: Do not escape backticks or dollar signs in template literals in this file.
 // Escaping is only for 'implementationCode' strings in tool definitions.
-import type { APIConfig, AIToolCall, LLMTool, MainView, ScoredTool, AIModel } from '../types';
+import type { APIConfig, AIToolCall, LLMTool, MainView, ScoredTool, AIModel, AIResponse } from '../types';
 import { ModelProvider } from '../types';
 
 import * as geminiService from './geminiService';
@@ -16,21 +16,18 @@ export const processRequest = async (
     relevantTools: LLMTool[],
     model: AIModel,
     apiConfig: APIConfig
-): Promise<AIToolCall[] | null> => {
+): Promise<AIResponse> => {
     const { text: userInput, files } = prompt;
 
     try {
         switch (model.provider) {
             case ModelProvider.GoogleAI:
-                const geminiResponse = await geminiService.generateWithTools(userInput, systemInstruction, model.id, apiConfig, relevantTools, files);
-                return geminiResponse.toolCalls;
+                return await geminiService.generateWithTools(userInput, systemInstruction, model.id, apiConfig, relevantTools, files);
             case ModelProvider.OpenAI_API:
-                 const openAIResponse = await openAIService.generateWithTools(userInput, systemInstruction, model.id, apiConfig, relevantTools, files);
-                return openAIResponse.toolCalls;
+                 return await openAIService.generateWithTools(userInput, systemInstruction, model.id, apiConfig, relevantTools, files);
             case ModelProvider.Ollama:
                 // Note: Ollama doesn't support multimodal input via this service yet.
-                const ollamaResponse = await ollamaService.generateWithTools(userInput, systemInstruction, model.id, apiConfig, relevantTools);
-                return ollamaResponse.toolCalls;
+                return await ollamaService.generateWithTools(userInput, systemInstruction, model.id, apiConfig, relevantTools);
             default:
                 throw new Error(`Model provider '${model.provider}' does not support tool generation.`);
         }

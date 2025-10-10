@@ -49,6 +49,7 @@ export interface AIToolCall {
 
 export interface AIResponse {
   toolCalls: AIToolCall[] | null;
+  text?: string; // The raw text response from the model, if any.
 }
 
 export interface EnrichedAIResponse {

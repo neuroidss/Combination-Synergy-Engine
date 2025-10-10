@@ -13,35 +13,33 @@ export const AI_MODELS: AIModel[] = [
     { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', provider: ModelProvider.GoogleAI },
     { id: 'gemini-2.0-flash-lite', name: 'Gemini 2.0 Flash-Lite', provider: ModelProvider.GoogleAI },
     { id: 'local/gemma-multimodal', name: 'Local Gemma Server (Multimodal)', provider: ModelProvider.OpenAI_API },
-    { id: 'hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:IQ2_M', name: 'Qwen3 Coder 30B A3B', provider: ModelProvider.OpenAI_API },
-    { id: 'gemma3:4b', name: 'Gemma 3 4B', provider: ModelProvider.OpenAI_API },
-    { id: 'hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:IQ2_M', name: 'Qwen3 Coder 30B A3B', provider: ModelProvider.Ollama },
-    { id: 'gemma3n:e4b', name: 'Gemma 3N E4B', provider: ModelProvider.Ollama },
-    { id: 'gemma3n:e2b', name: 'Gemma 3N E2B', provider: ModelProvider.Ollama },
-    { id: 'gemma3:4b', name: 'Gemma 3 4B', provider: ModelProvider.Ollama },
-    { id: 'qwen3:14b', name: 'Qwen3 14B', provider: ModelProvider.Ollama },
-    { id: 'qwen3:8b', name: 'Qwen3 8B', provider: ModelProvider.Ollama },
-    { id: 'qwen3:4b', name: 'Qwen3 4B', provider: ModelProvider.Ollama },
-    { id: 'qwen3:1.7b', name: 'Qwen3 1.7B', provider: ModelProvider.Ollama },
-    { id: 'qwen3:0.6b', name: 'Qwen3 0.6B', provider: ModelProvider.Ollama },
-    { id: 'onnx-community/gemma-3-1b-it-ONNX', name: 'gemma-3-1b-it-ONNX', provider: ModelProvider.HuggingFace },
-    { id: 'onnx-community/Qwen3-0.6B-ONNX', name: 'Qwen3-0.6B', provider: ModelProvider.HuggingFace },
-    { id: 'onnx-community/gemma-3n-E2B-it-ONNX', name: 'Gemma 3N E2B', provider: ModelProvider.HuggingFace },
-    { id: 'onnx-community/Qwen3-4B-ONNX', name: 'Qwen3-4B', provider: ModelProvider.HuggingFace },
-    { id: 'onnx-community/Qwen3-1.7B-ONNX', name: 'Qwen3-1.7B', provider: ModelProvider.HuggingFace },
+    { id: 'hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:IQ2_M', name: 'Qwen3 Coder 30B A3B (OpenAI_API)', provider: ModelProvider.OpenAI_API },
+    { id: 'gemma3:4b', name: 'Gemma 3 4B (OpenAI_API)', provider: ModelProvider.OpenAI_API },
+    { id: 'hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:IQ2_M', name: 'Qwen3 Coder 30B A3B (Ollama)', provider: ModelProvider.Ollama },
+    { id: 'gemma3n:e4b', name: 'Gemma 3N E4B (Ollama)', provider: ModelProvider.Ollama },
+    { id: 'gemma3n:e2b', name: 'Gemma 3N E2B (Ollama)', provider: ModelProvider.Ollama },
+    { id: 'gemma3:4b', name: 'Gemma 3 4B (Ollama)', provider: ModelProvider.Ollama },
+    { id: 'qwen3:14b', name: 'Qwen3 14B (Ollama)', provider: ModelProvider.Ollama },
+    { id: 'qwen3:8b', name: 'Qwen3 8B (Ollama)', provider: ModelProvider.Ollama },
+    { id: 'qwen3:4b', name: 'Qwen3 4B (Ollama)', provider: ModelProvider.Ollama },
+    { id: 'qwen3:1.7b', name: 'Qwen3 1.7B (Ollama)', provider: ModelProvider.Ollama },
+    { id: 'qwen3:0.6b', name: 'Qwen3 0.6B (Ollama)', provider: ModelProvider.Ollama },
+    { id: 'onnx-community/gemma-3-1b-it-ONNX', name: 'gemma-3-1b-it-ONNX (HuggingFace)', provider: ModelProvider.HuggingFace },
+    { id: 'onnx-community/Qwen3-0.6B-ONNX', name: 'Qwen3-0.6B (HuggingFace)', provider: ModelProvider.HuggingFace },
+    { id: 'onnx-community/gemma-3n-E2B-it-ONNX', name: 'Gemma 3N E2B (HuggingFace)', provider: ModelProvider.HuggingFace },
+    { id: 'onnx-community/Qwen3-4B-ONNX', name: 'Qwen3-4B (HuggingFace)', provider: ModelProvider.HuggingFace },
+    { id: 'onnx-community/Qwen3-1.7B-ONNX', name: 'Qwen3-1.7B (HuggingFace)', provider: ModelProvider.HuggingFace },
     { id: 'https://huggingface.co/Qwen/Qwen1.5-0.5B-Chat-GGUF/resolve/main/qwen1_5-0_5b-chat-q2_k.gguf', name: 'Qwen1.5 0.5B (Wllama)', provider: ModelProvider.Wllama },
     { id: 'https://huggingface.co/g-201/gemma-3-1b-it-gguf/resolve/main/gemma-3-1b-it-q2_k.gguf', name: 'Gemma 3 1B (Wllama)', provider: ModelProvider.Wllama },
 ];
 
-export const SWARM_AGENT_SYSTEM_PROMPT = `You are an autonomous AI agent, a specialist in bioinformatics and longevity science. Your purpose is to power the "SynergyForge" engine by fulfilling the user's research query.
-
-**Your Constitution (Mandatory Principles):**
-
-1.  **Primacy of Purpose:** Your sole purpose is to fulfill the user's research query.
-
-2.  **Mandatory Workflow:** To fulfill the research query, you MUST use the \`Execute Full Research and Proposal Workflow\` tool. This is the primary and expected method for completing any research task. You must pass the user's original query as the 'researchObjective' argument.
-
-3.  **Finality:** After the \`Execute Full Research and Proposal Workflow\` tool has finished, your task is complete. You MUST then call the 'Task Complete' tool with the summary provided by the workflow's output. Do not attempt any other actions.`;
+export const SWARM_AGENT_SYSTEM_PROMPT = `You are an expert bioinformatics research assistant.
+**Primary Goal:** Your main purpose is to conduct comprehensive research by using the 'Execute Full Research and Proposal Workflow' tool when the user provides a research objective.
+**Secondary Tasks:** You can also perform diagnostic or auxiliary tasks if specifically requested by the user. Analyze the user's request to determine the correct tool.
+**Execution Rules:**
+- For broad research objectives (e.g., "find synergies for X", "discover treatments for Y"), you MUST use the 'Execute Full Research and Proposal Workflow' tool.
+- For specific diagnostic requests (e.g., "test the proxy", "check running processes"), use the most appropriate specific tool.
+- Do not call the sub-steps of the main workflow (like 'Federated Scientific Search') directly unless you have a very specific reason. Prioritize the main workflow for research.`;
 
 
 // --- Generative Service Models ---

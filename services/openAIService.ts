@@ -187,6 +187,7 @@ export const generateWithTools = async (
 
         const data = await response.json();
         const toolCallsData = data.choices?.[0]?.message?.tool_calls;
+        const responseContent = data.choices?.[0]?.message?.content;
         
         if (toolCallsData && Array.isArray(toolCallsData) && toolCallsData.length > 0) {
             try {
@@ -213,24 +214,23 @@ export const generateWithTools = async (
                         arguments: parsedArgs
                     };
                 });
-                return { toolCalls };
+                return { toolCalls, text: responseContent };
             } catch (e) {
                 throw new Error(`Failed to process arguments from AI tool call: ${e instanceof Error ? e.message : String(e)}`);
             }
         }
         
         // Fallback: Check text content for a tool call
-        const responseContent = data.choices?.[0]?.message?.content;
         if (responseContent) {
             console.log("[OpenAI Service] No native tool call found. Attempting to parse from text content.");
             const parsedToolCalls = parseToolCallFromText(responseContent, toolNameMap);
             if (parsedToolCalls) {
                 console.log("[OpenAI Service] Successfully parsed tool call from text.", parsedToolCalls);
-                return { toolCalls: parsedToolCalls };
+                return { toolCalls: parsedToolCalls, text: responseContent };
             }
         }
         
-        return { toolCalls: null };
+        return { toolCalls: null, text: responseContent };
 
     } catch (e) {
         if (e instanceof Error && e.message.toLowerCase().includes('failed to fetch')) {

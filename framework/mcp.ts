@@ -25,7 +25,7 @@ export const SERVER_MANAGEMENT_TOOLS: ToolCreatorPayload[] = [
           const response = await fetch('http://localhost:3001/api/files/write', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ filePath: args.filePath, content: args.content, baseDir: args.filePath.endsWith('.py') ? 'scripts' : (args.baseDir || 'assets') }),
+              body: JSON.stringify({ filePath: args.filePath, content: args.content, baseDir: args.baseDir || (args.filePath.endsWith('.py') || args.filePath.endsWith('.ts') ? 'scripts' : 'assets') }),
           });
           
           const result = await response.json();

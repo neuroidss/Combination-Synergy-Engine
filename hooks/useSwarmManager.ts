@@ -3,7 +3,7 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { SWARM_AGENT_SYSTEM_PROMPT, CORE_TOOLS } from '../constants';
 import { contextualizeWithSearch, filterToolsWithLLM } from '../services/aiService';
-import type { AgentWorker, EnrichedAIResponse, AgentStatus, AIToolCall, LLMTool, ExecuteActionFunction, ScoredTool, MainView, ToolRelevanceMode, AIModel, APIConfig } from '../types';
+import type { AgentWorker, EnrichedAIResponse, AgentStatus, AIToolCall, LLMTool, ExecuteActionFunction, ScoredTool, MainView, ToolRelevanceMode, AIModel, APIConfig, AIResponse } from '../types';
 
 type UseSwarmManagerProps = {
     logEvent: (message: string) => void;
@@ -12,7 +12,7 @@ type UseSwarmManagerProps = {
     setApiCallCount: React.Dispatch<React.SetStateAction<Record<string, number>>>;
     findRelevantTools: (userRequestText: string, allTools: LLMTool[], topK: number, threshold: number, systemPromptForContext: string | null, mainView?: MainView | null) => Promise<ScoredTool[]>;
     mainView: MainView;
-    processRequest: (prompt: { text: string; files: any[] }, systemInstruction: string, agentId: string, relevantTools: LLMTool[]) => Promise<AIToolCall[] | null>;
+    processRequest: (prompt: { text: string; files: any[] }, systemInstruction: string, agentId: string, relevantTools: LLMTool[]) => Promise<AIResponse>;
     executeActionRef: React.MutableRefObject<ExecuteActionFunction | null>;
     allTools: LLMTool[];
     selectedModel: AIModel;
@@ -84,6 +84,7 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
     const [currentSystemPrompt, setCurrentSystemPrompt] = useState<string>(SWARM_AGENT_SYSTEM_PROMPT);
     const [pauseState, setPauseState] = useState<PauseState>(null);
     const [lastSwarmRunHistory, setLastSwarmRunHistory] = useState<EnrichedAIResponse[] | null>(null);
+    const [liveSwarmHistory, setLiveSwarmHistory] = useState<EnrichedAIResponse[]>([]);
     const [isSequential, setIsSequential] = useState(false);
     const [activeToolsForTask, setActiveToolsForTask] = useState<ScoredTool[]>([]);
     const [relevanceTopK, setRelevanceTopK] = useState<number>(25);
@@ -127,7 +128,10 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
 
     const clearPauseState = useCallback(() => setPauseState(null), []);
     const clearLastSwarmRunHistory = useCallback(() => setLastSwarmRunHistory(null), []);
-    const appendToSwarmHistory = useCallback((item: EnrichedAIResponse) => { swarmHistoryRef.current.push(item); }, []);
+    const appendToSwarmHistory = useCallback((item: EnrichedAIResponse) => { 
+        swarmHistoryRef.current.push(item);
+        setLiveSwarmHistory([...swarmHistoryRef.current]);
+     }, []);
 
     const toggleScriptPause = useCallback(() => {
         setScriptExecutionState(prev => {
@@ -157,13 +161,56 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
         logEvent(`[SCRIPT] Running from step ${index + 1}...`);
     }, [logEvent]);
 
+    // New Supervisor function to handle errors
+    const handleExecutionFailure = useCallback(async (
+        errorContext: {
+            failedAction: AIToolCall | string; // Tool call object or the raw prompt text
+            errorMessage: string;
+            failedTool?: LLMTool;
+        }
+    ) => {
+        logEvent(`[SUPERVISOR] Anomaly detected. Initiating diagnostic protocol for error: ${errorContext.errorMessage}`);
+        
+        const diagnosticTool = allTools.find(t => t.name === 'Diagnose Tool Execution Error');
+        if (!diagnosticTool || !executeActionRef.current) {
+            logEvent('[SUPERVISOR] FATAL: Diagnostic tool not found. Cannot perform root cause analysis.');
+            return;
+        }
+
+        try {
+            const simplifiedHistory = swarmHistoryRef.current.map(h => 
+                `Tool: ${h.toolCall?.name || 'N/A'}, Args: ${JSON.stringify(h.toolCall?.arguments)}, Result: ${h.executionError ? `ERROR(${h.executionError})` : 'OK'}`
+            ).join('\n');
+
+            const availableToolsSummary = allTools.map(t => ({ name: t.name, description: t.description }));
+            
+            const diagnosticArgs = {
+                researchObjective: typeof currentUserTask.userRequest === 'string' ? currentUserTask.userRequest : currentUserTask.userRequest?.text || 'N/A',
+                executionHistory: simplifiedHistory,
+                failedAction: typeof errorContext.failedAction === 'string' 
+                    ? `AI Generation Step with prompt: "${errorContext.failedAction}"` 
+                    : `Tool Call: "${errorContext.failedAction.name}" with args: ${JSON.stringify(errorContext.failedAction.arguments)}`,
+                errorMessage: errorContext.errorMessage,
+                availableTools: JSON.stringify(availableToolsSummary),
+                failedToolSourceCode: errorContext.failedTool?.implementationCode || 'N/A',
+                modelUsed: selectedModel.id,
+            };
+
+            // The supervisor directly invokes the diagnostic tool
+            await executeActionRef.current({ name: 'Diagnose Tool Execution Error', arguments: diagnosticArgs }, 'supervisor');
+            
+        } catch (diagnosticError) {
+            logEvent(`[SUPERVISOR] FATAL: The diagnostic agent itself failed. Error: ${diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError)}`);
+        }
+    }, [allTools, currentUserTask, executeActionRef, logEvent, selectedModel]);
+
     const runSwarmCycle = useCallback(async (isManualStep = false) => {
         if ((isCycleInProgress.current && !isManualStep) || !isRunningRef.current) return;
         isCycleInProgress.current = true;
 
         try {
             if (currentUserTask?.isScripted) {
-                if (scriptExecutionState !== 'running' && !isManualStep) return;
+                 if (scriptExecutionState !== 'running' && !isManualStep) return;
 
                 const script = currentUserTask.script || [];
                 if (currentScriptStepIndex >= script.length) {
@@ -176,7 +223,6 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
                 const agent = agentSwarmRef.current[0];
                 const toolCallFromScript = script[currentScriptStepIndex];
                 
-                // Inject projectName into the arguments for server-side tools
                 const toolCall = {
                     ...toolCallFromScript,
                     arguments: {
@@ -189,12 +235,29 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
                 
                 const result = await executeActionRef.current!(toolCall, agent.id, currentUserTask.context);
                 swarmHistoryRef.current.push(result);
+                setLiveSwarmHistory([...swarmHistoryRef.current]);
+
+
+                if (result.executionError) {
+                    setStepStatuses(prev => {
+                        const newStatuses = [...prev];
+                        newStatuses[currentScriptStepIndex] = { status: 'error', error: result.executionError };
+                        return newStatuses;
+                    });
+                    logEvent(`[ERROR] 🛑 Halting script due to error in '${toolCall.name}'.`);
+                    setScriptExecutionState('error');
+                    await handleExecutionFailure({
+                        failedAction: toolCall,
+                        errorMessage: result.executionError,
+                        failedTool: result.tool,
+                    });
+                    handleStopSwarm("Error during script execution.");
+                    return;
+                }
 
                 setStepStatuses(prev => {
                     const newStatuses = [...prev];
-                    newStatuses[currentScriptStepIndex] = result.executionError
-                        ? { status: 'error', error: result.executionError }
-                        : { status: 'completed', result: result.executionResult };
+                    newStatuses[currentScriptStepIndex] = { status: 'completed', result: result.executionResult };
                     return newStatuses;
                 });
                 
@@ -204,12 +267,6 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
                     logEvent(`[SUCCESS] ✅ Script reached 'Task Complete'.`);
                     setScriptExecutionState('finished');
                     handleStopSwarm("Script completed successfully.");
-                    return;
-                }
-                if (result.executionError) {
-                    logEvent(`[ERROR] 🛑 Halting script due to error in '${toolCall.name}': ${result.executionError}`);
-                    setScriptExecutionState('error');
-                    handleStopSwarm("Error during script execution.");
                     return;
                 }
             } else { // LLM-driven path...
@@ -264,42 +321,51 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
                 
                 const promptPayload = { text: promptForAgent, files: currentUserTask.userRequest.files || [] };
                 if (!executeActionRef.current) throw new Error("Execution context is not available.");
-                const toolCalls = await processRequest(promptPayload, currentSystemPrompt, agent.id, toolsForAgent);
+                const toolCallsResponse = await processRequest(promptPayload, currentSystemPrompt, agent.id, toolsForAgent);
+                const toolCalls = toolCallsResponse.toolCalls;
 
                 if (!isRunningRef.current) return;
                 
                 if (toolCalls && toolCalls.length > 0) {
-                    let executionResults: EnrichedAIResponse[] = [];
                     let hasError = false;
 
-                    if (isSequential) {
-                        for (const toolCall of toolCalls) {
-                            if (!isRunningRef.current) break;
-                            const result = await executeActionRef.current!(toolCall, agent.id, currentUserTask.context);
-                            swarmHistoryRef.current.push(result);
-                            executionResults.push(result);
-                            if (result.executionError) { hasError = true; }
-                            if (result.toolCall?.name === 'Task Complete') break;
+                    const executionPromises = toolCalls.map(async (toolCall) => {
+                        const result = await executeActionRef.current!(toolCall, agent.id, currentUserTask.context);
+                        if (result.executionError) {
+                            hasError = true;
+                            await handleExecutionFailure({
+                                failedAction: toolCall,
+                                errorMessage: result.executionError,
+                                failedTool: result.tool,
+                            });
                         }
-                    } else {
-                        const results = await Promise.all(toolCalls.map(tc => executeActionRef.current!(tc, agent.id, currentUserTask.context)));
-                        executionResults = results;
-                        if (!isRunningRef.current) return;
-                        swarmHistoryRef.current.push(...executionResults);
-                        hasError = executionResults.some(r => r.executionError);
-                    }
-                    
+                        return result;
+                    });
+
+                    const results = await Promise.all(executionPromises);
+                    swarmHistoryRef.current.push(...results);
+                    setLiveSwarmHistory([...swarmHistoryRef.current]);
+
+
                     if (!isRunningRef.current) return;
-                    const taskComplete = executionResults.find(r => r.toolCall?.name === 'Task Complete' && !r.executionError);
+                    
+                    const taskComplete = results.find(r => r.toolCall?.name === 'Task Complete' && !r.executionError);
                     if (taskComplete) { handleStopSwarm("Task completed successfully"); return; }
                     
-                    // Resilience: Instead of stopping on error, log it and let the agent decide the next step.
                     if (hasError) {
-                        logEvent('[WARN] An error occurred in one or more tool calls. The agent will attempt to recover.');
+                        logEvent('[SUPERVISOR] One or more tool calls failed. Halting task after diagnosis.');
+                        handleStopSwarm("Unrecoverable error during tool execution.");
+                        return;
                     }
 
                 } else {
-                    logEvent('[WARN] ⚠️ The agent did not return a tool call. This may mean it is stuck or believes the task is complete without calling the "Task Complete" tool. Stopping task to prevent an infinite loop.');
+                    const errorMessage = "The agent did not return a tool call. This may mean it is stuck or believes the task is complete without calling the 'Task Complete' tool.";
+                    let detailedErrorMessage = errorMessage;
+                    if (toolCallsResponse.text && toolCallsResponse.text.trim()) {
+                        detailedErrorMessage += ` The agent's response was: "${toolCallsResponse.text.trim()}"`;
+                    }
+                    logEvent(`[SUPERVISOR] ${detailedErrorMessage}`);
+                    await handleExecutionFailure({ failedAction: promptForAgent, errorMessage: detailedErrorMessage });
                     handleStopSwarm("Agent did not provide a next action.");
                     return;
                 }
@@ -308,6 +374,10 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
             const errorMessage = err instanceof Error ? err.message : "Unknown error.";
             logEvent(`[ERROR] 🛑 Agent task failed: ${errorMessage}`);
             setScriptExecutionState('error');
+            await handleExecutionFailure({
+                failedAction: "Main swarm cycle execution",
+                errorMessage: errorMessage
+            });
             handleStopSwarm("Critical agent error");
         } finally {
             if (isRunningRef.current) {
@@ -320,7 +390,7 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
             isCycleInProgress.current = false;
         }
     }, [
-        currentUserTask, logEvent, scriptExecutionState, currentScriptStepIndex, handleStopSwarm, 
+        currentUserTask, logEvent, scriptExecutionState, currentScriptStepIndex, handleStopSwarm, handleExecutionFailure,
         findRelevantTools, relevanceMode, relevanceTopK, relevanceThreshold, 
         mainView, currentSystemPrompt, isSequential, setApiCallCount, 
         setActiveToolsForTask, processRequest, executeActionRef, allTools,
@@ -335,6 +405,7 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
         if (!resume) {
             setLastSwarmRunHistory(null);
             swarmHistoryRef.current = [];
+            setLiveSwarmHistory([]);
             swarmIterationCounter.current = 0;
             setCurrentScriptStepIndex(0);
             setStepStatuses(task.script ? Array(task.script.length).fill({ status: 'pending' }) : []);
@@ -342,7 +413,10 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
             setActiveToolsForTask([]);
         } else {
             logEvent(`[INFO] ▶️ Resuming task...`);
-            if (historyEventToInject) swarmHistoryRef.current.push(historyEventToInject);
+            if (historyEventToInject) {
+                swarmHistoryRef.current.push(historyEventToInject);
+                setLiveSwarmHistory([...swarmHistoryRef.current]);
+            }
         }
 
         let finalTask = typeof task === 'string' ? { userRequest: { text: task, files: [] } } : task;
@@ -361,7 +435,7 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
 
     const state = {
         agentSwarm, isSwarmRunning, currentUserTask, currentSystemPrompt, pauseState,
-        lastSwarmRunHistory, activeToolsForTask, relevanceTopK, relevanceThreshold,
+        lastSwarmRunHistory, liveSwarmHistory, activeToolsForTask, relevanceTopK, relevanceThreshold,
         relevanceMode, scriptExecutionState, currentScriptStepIndex, stepStatuses,
     };
 
