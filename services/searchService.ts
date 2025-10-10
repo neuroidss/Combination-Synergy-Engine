@@ -358,12 +358,18 @@ export const enrichSource = async (source: SearchResult, logEvent: (message: str
 
     try {
         const response = await fetchWithCorsFallback(urlToScrape, logEvent, proxyUrl);
+        
+        // If we are using our local proxy, the response.url will be the proxy's URL.
+        // We should always use the original URL we intended to scrape as the canonical link in this case.
+        // For public proxies or direct fetches, response.url might reflect a true redirect from the target site.
         const finalUrl = response.url;
-        const linkToSave = (finalUrl && !finalUrl.includes('corsproxy') && !finalUrl.includes('allorigins') && !finalUrl.includes('thingproxy'))
-            ? finalUrl
-            : urlToScrape;
+        const linkToSave = proxyUrl 
+            ? urlToScrape // If local proxy is used, ALWAYS trust the original URL
+            : (finalUrl && !finalUrl.includes('corsproxy') && !finalUrl.includes('allorigins') && !finalUrl.includes('thingproxy'))
+                ? finalUrl // For public proxies or direct, check for redirects, but ignore proxy domains
+                : urlToScrape; // Default to original URL
 
-        if (linkToSave !== urlToScrape) {
+        if (linkToSave !== urlToScrape && !proxyUrl) { // Only log redirects if it's not our local proxy
             logEvent(`[Enricher] URL redirected to canonical: "${linkToSave}"`);
         }
 

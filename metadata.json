@@ -1,5 +1,5 @@
 {
-  "name": "Combination Synergy Engine deep research tools",
+  "name": "Combination Synergy Engine model risks",
   "description": "An AI-powered Combination Synergy Engine that mines scientific literature for known longevity interventions and hypothesizes novel synergies. Powers an educational organoid simulator to test combinations.",
   "requestFramePermissions": [],
   "prompt": "Combination Synergy Engine (LongBio + Modality-Agnostic)\nINTERVENTIONS\nMine existing cases of successful synergies across literature. Create synergy scoring across drugs/devices/behaviors with MoA complementarity; propose trial-ready combinations."

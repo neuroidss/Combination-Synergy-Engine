@@ -1,6 +1,3 @@
-
-
-
 import type { ToolCreatorPayload } from '../types';
 
 export const DATA_RECORDER_TOOLS: ToolCreatorPayload[] = [
@@ -77,20 +74,31 @@ export const DATA_RECORDER_TOOLS: ToolCreatorPayload[] = [
     },
     {
         name: 'RecordSynergy',
-        description: 'Records the details of a single synergistic intervention identified from the literature.',
+        description: 'Records the details of a single synergistic intervention, including MoA and Theory Alignment scores.',
         category: 'Functional',
         executionEnvironment: 'Client',
-        purpose: 'To log a single identified synergy, which the agent calls iteratively. This avoids generating and parsing a large, complex JSON array.',
+        purpose: 'To log a single identified synergy with its complete scoring profile, which the agent calls iteratively.',
         parameters: [
-            { name: 'combination', type: 'array', description: 'An array of strings representing the interventions in the synergy (e.g., ["Metformin", "Rapamycin"]).', required: true },
+            { name: 'combination', type: 'array', description: 'An array of objects, each with "name" and "type". Types are "drug" (molecules, wetware), "device" (hardware, nanorobots), or "behavior" (algorithms, lifestyle). E.g., [{"name": "Metformin", "type": "drug"}, {"name": "Exercise", "type": "behavior"}]', required: true },
             { name: 'status', type: 'string', description: 'The status of the synergy, either "Known" or "Hypothesized".', required: true },
             { name: 'synergyType', type: 'string', description: 'The type of interaction, e.g., "Synergistic", "Additive", "Antagonistic".', required: true },
             { name: 'summary', type: 'string', description: 'A brief explanation of the synergistic interaction and the rationale behind it.', required: true },
             { name: 'potentialRisks', type: 'string', description: 'A clear description of potential risks, side effects, or contraindications of the combination.', required: true },
+            { name: 'sourceUri', type: 'string', description: 'The URI of the source document where this synergy was found.', required: false },
+            { name: 'sourceTitle', type: 'string', description: 'The title of the source document.', required: false },
+            { name: 'moaComplementarityScore', type: 'number', description: 'A score from 0-100 representing how well the mechanisms of action complement each other. Provide 0 if not applicable.', required: false },
+            { name: 'moaJustification', type: 'string', description: 'A brief scientific justification for the complementarity score. Provide "N/A" if not applicable.', required: false },
+            { name: 'trialPriorityScore', type: 'number', description: 'The final calculated score (0-100) indicating the priority for a clinical trial.', required: false },
+            { name: 'theoryAlignmentScores', type: 'object', description: 'An object containing scores for alignment with different aging theories (e.g., {"stochastic": 80}).', required: false },
         ],
         implementationCode: `
-            const { combination, status, synergyType, summary, potentialRisks } = args;
-            runtime.logEvent(\`[Synergy Analysis] Recording synergy: \${combination.join(' + ')}\`);
+            const { combination, status, synergyType, summary, potentialRisks, sourceUri, sourceTitle, moaComplementarityScore, moaJustification, trialPriorityScore, theoryAlignmentScores } = args;
+
+            if (!Array.isArray(combination) || combination.length === 0 || combination.some(c => typeof c !== 'object' || !c.name || !c.type)) {
+                throw new Error("A synergy 'combination' is required and must be an array of objects, each with a 'name' and a 'type'.");
+            }
+
+            runtime.logEvent(\`[Synergy Analysis] Recording synergy: \${combination.map(c => c.name).join(' + ')}\`);
             
             return {
                 success: true,
@@ -100,6 +108,12 @@ export const DATA_RECORDER_TOOLS: ToolCreatorPayload[] = [
                     synergyType,
                     summary,
                     potentialRisks,
+                    sourceUri,
+                    sourceTitle,
+                    moaComplementarityScore: moaComplementarityScore || 0,
+                    moaJustification: moaJustification || 'N/A',
+                    trialPriorityScore: trialPriorityScore || 0,
+                    theoryAlignmentScores: theoryAlignmentScores || {},
                 }
             };
         `
@@ -155,29 +169,25 @@ export const DATA_RECORDER_TOOLS: ToolCreatorPayload[] = [
         executionEnvironment: 'Client',
         purpose: 'To capture the structured output of the "Business Analyst" agent, turning research findings into an actionable investment proposal.',
         parameters: [
-            { name: 'combination', type: 'array', description: 'The array of intervention names.', required: true },
+            { name: 'combination', type: 'array', description: 'The array of intervention objects, each with "name" and "type".', required: true },
             { name: 'executiveSummary', type: 'string', description: 'A high-level summary for investors.', required: true },
             { name: 'scientificRationale', type: 'string', description: 'Detailed explanation of the biological mechanism and synergy.', required: true },
             { name: 'inSilicoValidation', type: 'string', description: 'The results from the SynergyForge simulation, presented as evidence. E.g., "Predicted healthspan increase of 45% (p<0.001, n=1000) across 3 of 4 aging models."', required: true },
             { name: 'marketAndIP', type: 'string', description: 'Analysis of the market opportunity and potential for intellectual property.', required: true },
             { name: 'roadmap', type: 'string', description: 'Proposed next steps, e.g., preclinical animal studies.', required: true },
-            { name: 'risks', type: 'string', description: 'An analysis of known risks and potential side effects.', required: true },
+            { name: 'riskAnalysis', type: 'object', description: 'A structured object containing risk scores and a summary. Example: {"scientificRisk": 30, "commercialRisk": 50, "safetyRisk": 60, "overallRiskScore": 45, "riskSummary": "Primary risk is off-target effects..."}', required: true },
+            { name: 'mitigationPlan', type: 'string', description: 'A concrete plan of action to de-risk the proposal (e.g., "Conduct advanced toxicology screens and a 12-month mouse study.").', required: true },
+            { name: 'estimatedCostUSD', type: 'number', description: 'The estimated cost in USD to execute the mitigation plan.', required: true }
         ],
         implementationCode: `
             const { ...dossierData } = args;
+            const { combination } = dossierData;
             
-            // FIX: Add robustness for 'combination' argument which might not be an array.
-            const combination = dossierData.combination;
-            const finalCombination = Array.isArray(combination) ? combination : (combination ? [String(combination)] : []);
-
-            if (finalCombination.length === 0 || (finalCombination.length === 1 && !finalCombination[0])) {
-                throw new Error("A combination of interventions is required for a dossier.");
+            if (!Array.isArray(combination) || combination.length === 0 || combination.some(c => typeof c !== 'object' || !c.name || !c.type)) {
+                throw new Error("A dossier 'combination' is required and must be an array of objects, each with a 'name' and a 'type'.");
             }
             
-            runtime.logEvent(\`[Dossier] Recording investment proposal for: \${finalCombination.join(' + ')}\`);
-            
-            // Ensure the dossier object has the corrected array format
-            dossierData.combination = finalCombination;
+            runtime.logEvent(\`[Dossier] Recording investment proposal for: \${combination.map(c => c.name).join(' + ')}\`);
 
             return {
                 success: true,
@@ -192,21 +202,27 @@ export const DATA_RECORDER_TOOLS: ToolCreatorPayload[] = [
         executionEnvironment: 'Client',
         purpose: 'To log the final critique of a proposal, making it available for the UI to display.',
         parameters: [
-             { name: 'combination', type: 'array', description: 'The combination of interventions being critiqued.', required: true },
-             // FIX: Reverted to single-quoted strings to resolve a build system parsing issue with template literals in this context. Escaped the apostrophe.
-             { name: 'strengths', type: 'string', description: 'A summary of the proposal\'s strong points.', required: true },
-             { name: 'weaknesses', type: 'string', description: 'A summary of the proposal\'s weaknesses and understated risks.', required: true },
+             { name: 'combination', type: 'array', description: 'The combination of intervention objects (with name and type) being critiqued.', required: true },
+             { name: 'strengths', type: 'string', description: "A summary of the proposal's strong points.", required: true },
+             { name: 'weaknesses', type: 'string', description: "A summary of the proposal's weaknesses and understated risks.", required: true },
              { name: 'contradictoryEvidence', type: 'array', description: 'An array of strings, where each string is a piece of evidence that contradicts the proposal.', required: true },
              { name: 'overallVerdict', type: 'string', description: 'The final verdict, must be one of: "Sound", "Needs Revision", or "High Risk".', required: true },
         ],
         implementationCode: `
-        const { ...critiqueData } = args;
-        if (!critiqueData.combination || !critiqueData.overallVerdict) {
-            throw new Error("Critique data is missing required fields 'combination' or 'overallVerdict'.");
-        }
-        runtime.logEvent(\`[Critique] Recording critique for: \${critiqueData.combination.join(' + ')}\`);
-        return { success: true, critique: critiqueData };
-    `
+            const { ...critiqueData } = args;
+            const { combination } = critiqueData;
+
+            if (!Array.isArray(combination) || combination.length === 0 || combination.some(c => typeof c !== 'object' || !c.name || !c.type)) {
+                throw new Error("A critique 'combination' is required and must be an array of objects, each with a 'name' and a 'type'.");
+            }
+            
+            if (!critiqueData.overallVerdict) {
+                 throw new Error("Critique data is missing required field 'overallVerdict'.");
+            }
+
+            runtime.logEvent(\`[Critique] Recording critique for: \${combination.map(c => c.name).join(' + ')}\`);
+            return { success: true, critique: critiqueData };
+        `
     },
     {
         name: 'RecordErrorAnalysis',

@@ -1,47 +1,44 @@
 
+
+
 import type { ToolCreatorPayload } from '../types';
 
 export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
     {
         name: 'Execute Full Research and Proposal Workflow',
-        description: 'Executes the complete, end-to-end workflow from scientific literature search to generating and then critically reviewing investment-ready trial dossiers for the most promising synergistic combinations.',
+        description: 'Executes the complete, end-to-end workflow from scientific literature search to identifying and scoring all potential synergistic combinations for trial-readiness.',
         category: 'Automation',
         executionEnvironment: 'Client',
         purpose: 'To provide a single, powerful, and reliable command for the agent to perform its entire core function autonomously.',
         parameters: [
             { name: 'researchObjective', type: 'string', description: 'The user\'s high-level research objective (e.g., "Find novel synergistic treatments for Alzheimer\'s disease").', required: true },
-            { name: 'numberOfProposals', type: 'number', description: 'The number of top proposals to generate dossiers for (default: 2).', required: false },
         ],
         implementationCode: `
-        const { researchObjective, numberOfProposals = 2 } = args;
+        const { researchObjective } = args;
         runtime.logEvent('[Workflow] Starting full research and proposal workflow...');
 
-        // Step 1: Bootstrap Proxy for reliable network access
-        runtime.logEvent('[Workflow] Step 1/5: Initializing local web proxy service...');
-        let proxyUrl = null;
-        try {
-            const proxyResult = await runtime.tools.run('Bootstrap Web Proxy Service', {});
-            if (proxyResult && proxyResult.proxyUrl) {
-                proxyUrl = proxyResult.proxyUrl;
-                 runtime.logEvent(\`[Workflow] Successfully started local proxy at \${proxyUrl}\`);
-            } else {
-                 runtime.logEvent('[Workflow] WARN: Could not start local proxy service. Will rely on public CORS proxies.');
-            }
-        } catch (e) {
-             runtime.logEvent(\`[Workflow] WARN: Failed to start local proxy service: \${e.message}.\`);
-        }
-        
-        // Step 2: Refine Search Queries
-        runtime.logEvent('[Workflow] Step 2/5: Refining search queries...');
+        // Step 1: Refine Search Queries
+        runtime.logEvent('[Workflow] Step 1/4: Refining search queries...');
         const refineResult = await runtime.tools.run('Refine Search Queries', { researchObjective });
         if (!refineResult || !refineResult.queries || refineResult.queries.length === 0) {
-            throw new Error("Workflow failed at Step 2: Could not generate refined search queries from the objective.");
+            throw new Error("Workflow failed at Step 1: Could not generate refined search queries from the objective.");
         }
         const refinedQueryString = refineResult.queries.join('; ');
         runtime.logEvent(\`[Workflow] Refined queries: \${refinedQueryString}\`);
 
-        // Step 3: Deep Federated Search (with Smart Retry)
-        runtime.logEvent('[Workflow] Step 3/5: Performing deep search on scientific literature...');
+        // Step 2: Deep Federated Search (with Smart Retry)
+        runtime.logEvent('[Workflow] Step 2/4: Performing deep search on scientific literature...');
+        
+        let proxyUrl = null;
+        try {
+            const proxyBootstrapResult = await runtime.tools.run('Test Web Proxy Service', {});
+            if (proxyBootstrapResult.proxyUrl) {
+                proxyUrl = proxyBootstrapResult.proxyUrl;
+            }
+        } catch (e) {
+            runtime.logEvent(\`[Workflow] WARN: Could not start or test local proxy service: \${e.message}. Will rely on public proxies.\`);
+        }
+
         let searchResult = await runtime.tools.run('Federated Scientific Search', { query: refinedQueryString, maxResultsPerSource: 20, proxyUrl });
         
         if (!searchResult || !searchResult.searchResults || searchResult.searchResults.length === 0) {
@@ -58,18 +55,17 @@ export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
                 }
                  runtime.logEvent('[Workflow] ✅ Diagnostic retry succeeded. Proceeding with new search results.');
             } catch(e) {
-                 throw new Error(\`Workflow failed at Step 3: Federated search returned no results, even after a diagnostic retry. Error: \${e.message}\`);
+                 throw new Error(\`Workflow failed at Step 2: Federated search returned no results, even after a diagnostic retry. Error: \${e.message}\`);
             }
         }
         
         const initialSearchResults = searchResult.searchResults;
         runtime.logEvent(\`[Workflow] Found \${initialSearchResults.length} potential sources. Beginning streaming validation and analysis...\`);
         
-        // Step 4: STREAMING VALIDATION, CLASSIFICATION, AND ANALYSIS LOOP
-        runtime.logEvent(\`[Workflow] Step 4/5: Processing \${initialSearchResults.length} sources individually...\`);
+        // Step 3: STREAMING VALIDATION, CLASSIFICATION, AND ANALYSIS LOOP
+        runtime.logEvent(\`[Workflow] Step 3/4: Processing \${initialSearchResults.length} sources individually...\`);
         let allValidatedSources = [];
         let allSynergies = [];
-        let generatedDossiers = [];
         let metaAnalyses = [];
 
         const gameParamsTool = runtime.tools.list().find(t => t.name === 'RecordSynergyGameParameters');
@@ -86,6 +82,13 @@ export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
                 runtime.logEvent('[Workflow] ...source failed validation or enrichment. Skipping.');
                 continue; // Skip to the next source
             }
+            
+            // NEW: Add reliability check
+            const RELIABILITY_THRESHOLD = 0.6; // 60%
+            if (validatedSource.reliabilityScore < RELIABILITY_THRESHOLD) {
+                runtime.logEvent(\`[Workflow] ...source "\${validatedSource.title.substring(0,50)}..." skipped due to low reliability score (\${(validatedSource.reliabilityScore * 100).toFixed(0)}% < \${RELIABILITY_THRESHOLD * 100}%).\`);
+                continue;
+            }
             allValidatedSources.push(validatedSource);
 
             // b. Classify ONE source
@@ -94,11 +97,11 @@ export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
             if (isMeta) {
                 metaAnalyses.push(validatedSource);
                 runtime.logEvent('[Workflow] ...classified as Meta-Analysis.');
-                continue; // Don't analyze meta-analyses for novel synergies
+            } else {
+                runtime.logEvent('[Workflow] ...classified as Primary Study.');
             }
-            runtime.logEvent('[Workflow] ...classified as Primary Study.');
             
-            // c. Analyze ONE primary study for synergies
+            // c. Analyze the source for synergies (both meta-analyses and primary studies)
             const synergyAnalysisResult = await runtime.tools.run('Analyze Single Source for Synergies', {
                 sourceToAnalyze: validatedSource,
                 researchObjective,
@@ -111,36 +114,27 @@ export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
 
                  for (const synergy of newSynergies) {
                     // d. Generate Game Parameters for synergy
-                    const paramsPrompt = \`Based on the synergy: \${JSON.stringify(synergy)}, call the 'RecordSynergyGameParameters' tool with appropriate numerical values. Ensure synergyCombination matches the input.\`;
+                    const paramsPrompt = \`Based on the synergy: \${JSON.stringify(synergy)}, call the 'RecordSynergyGameParameters' tool with appropriate numerical values. The 'synergyCombination' parameter must be an array of strings containing only the intervention names.\`;
                     const systemInstruction = "You are an expert system that translates scientific data into simulation parameters by calling the provided tool. Respond only with a tool call.";
                     try {
                         const aiResponse = await runtime.ai.processRequest(paramsPrompt, systemInstruction, [gameParamsTool]);
                         const toolCall = aiResponse?.toolCalls?.[0];
                         if (toolCall && toolCall.name === 'RecordSynergyGameParameters') {
+                            // Safeguard: Manually inject the combination names to ensure it's correct, as the LLM might get it wrong.
+                            toolCall.arguments.synergyCombination = synergy.combination.map(c => c.name);
                             await runtime.tools.run(toolCall.name, toolCall.arguments);
                         }
                     } catch(e) {
-                        runtime.logEvent(\`[Workflow] WARN: Failed to generate parameters for \${synergy.combination.join(' + ')}. Error: \${e.message}\`);
-                    }
-
-                    // e. Generate Proposal for novel/hypothesized synergies
-                    if (synergy.status === 'Hypothesized' && generatedDossiers.length < numberOfProposals) {
-                        const proposalResult = await runtime.tools.run('Generate Proposal for Single Synergy', {
-                            synergy: synergy,
-                            backgroundSources: allValidatedSources // Provide all sources found so far for context
-                        });
-                        if (proposalResult.dossier) {
-                            generatedDossiers.push(proposalResult.dossier);
-                        }
+                        runtime.logEvent(\`[Workflow] WARN: Failed to generate parameters for \${synergy.combination.map(c => c.name).join(' + ')}. Error: \${e.message}\`);
                     }
                  }
             }
              await new Promise(resolve => setTimeout(resolve, 500)); // Rate limit between sources
         }
 
-        // Step 5: Final Summary
-        runtime.logEvent('[Workflow] Step 5/5: Finalizing...');
-        const finalSummary = \`Workflow completed for objective: "\${researchObjective}". Fully processed \${initialSearchResults.length} potential articles, validating \${allValidatedSources.length}. Identified \${allSynergies.length} synergies and generated \${generatedDossiers.length} proposals.\`;
+        // Step 4: Final Summary
+        runtime.logEvent('[Workflow] Step 4/4: Finalizing...');
+        const finalSummary = \`Workflow completed for objective: "\${researchObjective}". Fully processed \${initialSearchResults.length} potential articles, validating \${allValidatedSources.length}. Identified \${allSynergies.length} potential synergies and scored them for trial readiness. Results are available in the 'Synergies' and 'Proposals' tabs.\`;
         runtime.logEvent(\`[Workflow] ✅ \${finalSummary}\`);
         return { success: true, message: "Workflow finished successfully.", summary: finalSummary };
     `

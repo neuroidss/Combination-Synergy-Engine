@@ -18,20 +18,28 @@ interface UIToolRunnerComponentProps {
 type ErrorBoundaryProps = {
   fallback: React.ReactNode;
   toolName: string;
+  children: React.ReactNode;
 };
 type ErrorBoundaryState = {
   hasError: boolean;
 };
 
-class ErrorBoundary extends React.Component<React.PropsWithChildren<ErrorBoundaryProps>, ErrorBoundaryState> {
-  // FIX: Switched from a constructor to class property syntax for state initialization. This is a more modern approach and can resolve issues with `this` context in certain TypeScript/Babel configurations, addressing the compilation errors regarding missing `state`, `props`, and `setState` properties.
-  state: ErrorBoundaryState = { hasError: false };
+class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  // FIX: Switched from class field state initialization to a constructor.
+  // The previous approach was causing TypeScript errors where inherited properties
+  // like 'props' and 'setState' were not being recognized. The constructor
+  // explicitly calls super(props) and sets initial state, which is a more
+  // standard and robust pattern for class components.
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false };
+  }
 
   static getDerivedStateFromError(error: any): ErrorBoundaryState {
     return { hasError: true };
   }
 
-  componentDidUpdate(prevProps: Readonly<React.PropsWithChildren<ErrorBoundaryProps>>) {
+  componentDidUpdate(prevProps: Readonly<ErrorBoundaryProps>) {
     if (this.props.toolName !== prevProps.toolName) {
       // eslint-disable-next-line react/no-did-update-set-state
       this.setState({ hasError: false });
