@@ -19,14 +19,20 @@ const handleProgress = (onProgress: (message: string) => void = () => {}) => {
 };
 
 const getPipeline = async (modelId: string, onProgress: (message: string) => void = () => {}): Promise<TextGenerationPipeline> => {
+    const [repoId, quantization] = modelId.split('|');
+    const dtype = quantization || 'auto';
+
     // In this simplified version, device is hardcoded, but can be expanded via a config.
     const huggingFaceDevice = 'webgpu'; 
 
-    if (generator && currentModelId === modelId && currentDevice === huggingFaceDevice) {
+    // The key for the cache now includes the quantization type
+    const uniqueModelKey = `${repoId}|${dtype}`;
+
+    if (generator && currentModelId === uniqueModelKey && currentDevice === huggingFaceDevice) {
         return generator;
     }
 
-    onProgress(`🚀 Initializing model: ${modelId}. This may take a few minutes...`);
+    onProgress(`🚀 Initializing model: ${repoId} (Quantization: ${dtype}). This may take a few minutes...`);
     
     if (generator) {
         await generator.dispose();
@@ -37,23 +43,23 @@ const getPipeline = async (modelId: string, onProgress: (message: string) => voi
     (window as any).env.allowLocalModels = false;
     (window as any).env.useFbgemm = false;
     
-    // The options for the pipeline. Using 'auto' for dtype to allow for automatic quantization and better device compatibility.
+    // The options for the pipeline. Using the parsed dtype.
     const pipelineOptions = {
         device: huggingFaceDevice,
         progress_callback: handleProgress(onProgress),
-        dtype: 'auto'
+        dtype: dtype,
     };
     
     // By casting the options argument to 'any' at the call site, we prevent TypeScript from creating
     // a massive union type from all the pipeline() overloads, which was causing a "type is too complex" error.
     // This is a necessary workaround for a known issue with the transformers.js library's complex types.
     // @ts-ignore
-    generator = await pipeline('text-generation', modelId, pipelineOptions as any) as TextGenerationPipeline;
+    generator = await pipeline('text-generation', repoId, pipelineOptions as any) as TextGenerationPipeline;
 
-    currentModelId = modelId;
+    currentModelId = uniqueModelKey;
     currentDevice = huggingFaceDevice;
     
-    onProgress(`✅ Model ${modelId} loaded successfully.`);
+    onProgress(`✅ Model ${repoId} (${dtype}) loaded successfully.`);
     return generator;
 };
 
@@ -77,12 +83,12 @@ const executePipe = async (pipe: TextGenerationPipeline, system: string, user:st
     return assistantResponse;
 };
 
-const generateDetailedError = (error: unknown, modelId: string, rawResponse?: string): Error => {
+const generateDetailedError = (error: unknown, repoId: string, rawResponse?: string): Error => {
     let finalMessage;
     if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
-        finalMessage = `Network error: failed to download model files for ${modelId}. Check your internet connection and ad blockers.`;
+        finalMessage = `Network error: failed to download model files for ${repoId}. Check your internet connection and ad blockers.`;
     } else {
-        finalMessage = `HuggingFace model error (${modelId}): ${error instanceof Error ? error.message : "An unknown error occurred"}`;
+        finalMessage = `HuggingFace model error (${repoId}): ${error instanceof Error ? error.message : "An unknown error occurred"}`;
     }
     const processingError = new Error(finalMessage) as any;
     processingError.rawAIResponse = rawResponse || "Could not get raw response.";
@@ -90,12 +96,13 @@ const generateDetailedError = (error: unknown, modelId: string, rawResponse?: st
 };
 
 const generate = async (system: string, user: string, modelId: string, temperature: number, onProgress: (message: string) => void = () => {}): Promise<string> => {
+     const [repoId] = modelId.split('|');
      try {
         const pipe = await getPipeline(modelId, onProgress);
         const responseText = await executePipe(pipe, system, user, temperature);
         return responseText;
     } catch (e) {
-        throw generateDetailedError(e, modelId);
+        throw generateDetailedError(e, repoId);
     }
 };
 

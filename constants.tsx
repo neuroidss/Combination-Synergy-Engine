@@ -24,11 +24,16 @@ export const AI_MODELS: AIModel[] = [
     { id: 'qwen3:4b', name: 'Qwen3 4B (Ollama)', provider: ModelProvider.Ollama },
     { id: 'qwen3:1.7b', name: 'Qwen3 1.7B (Ollama)', provider: ModelProvider.Ollama },
     { id: 'qwen3:0.6b', name: 'Qwen3 0.6B (Ollama)', provider: ModelProvider.Ollama },
-    { id: 'onnx-community/gemma-3-1b-it-ONNX', name: 'gemma-3-1b-it-ONNX (HuggingFace)', provider: ModelProvider.HuggingFace },
-    { id: 'onnx-community/Qwen3-0.6B-ONNX', name: 'Qwen3-0.6B (HuggingFace)', provider: ModelProvider.HuggingFace },
-    { id: 'onnx-community/gemma-3n-E2B-it-ONNX', name: 'Gemma 3N E2B (HuggingFace)', provider: ModelProvider.HuggingFace },
-    { id: 'onnx-community/Qwen3-4B-ONNX', name: 'Qwen3-4B (HuggingFace)', provider: ModelProvider.HuggingFace },
-    { id: 'onnx-community/Qwen3-1.7B-ONNX', name: 'Qwen3-1.7B (HuggingFace)', provider: ModelProvider.HuggingFace },
+    
+    // Updated HuggingFace models with quantization options
+    { id: 'onnx-community/Qwen3-0.6B-ONNX|q4f16', name: 'Qwen3-0.6B Q4_F16 (HF)', provider: ModelProvider.HuggingFace },
+    { id: 'onnx-community/Qwen3-0.6B-ONNX|q4', name: 'Qwen3-0.6B Q4 (HF)', provider: ModelProvider.HuggingFace },
+    { id: 'onnx-community/Qwen3-0.6B-ONNX|int8', name: 'Qwen3-0.6B INT8 (HF)', provider: ModelProvider.HuggingFace },
+    { id: 'onnx-community/gemma-3-1b-it-ONNX|q4', name: 'Gemma-3-1B-IT Q4 (HF)', provider: ModelProvider.HuggingFace },
+    { id: 'onnx-community/gemma-3n-E2B-it-ONNX|q4', name: 'Gemma-3N-E2B-IT Q4 (HF)', provider: ModelProvider.HuggingFace },
+    { id: 'onnx-community/Qwen3-1.7B-ONNX|q4', name: 'Qwen3-1.7B Q4 (HF)', provider: ModelProvider.HuggingFace },
+    { id: 'onnx-community/Qwen3-4B-ONNX|q4', name: 'Qwen3-4B Q4 (HF)', provider: ModelProvider.HuggingFace },
+    
     { id: 'https://huggingface.co/Qwen/Qwen1.5-0.5B-Chat-GGUF/resolve/main/qwen1_5-0_5b-chat-q2_k.gguf', name: 'Qwen1.5 0.5B (Wllama)', provider: ModelProvider.Wllama },
     { id: 'https://huggingface.co/g-201/gemma-3-1b-it-gguf/resolve/main/gemma-3-1b-it-q2_k.gguf', name: 'Gemma 3 1B (Wllama)', provider: ModelProvider.Wllama },
 ];

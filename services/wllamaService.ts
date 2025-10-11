@@ -24,9 +24,8 @@ const getWllama = (onProgress: (message: string) => void): Wllama => {
             multiThread: false,
             // Provide explicit CDN paths for WASM files for robust loading.
             wasmPaths: {
-                'single-thread/wllama.wasm': 'https://cdn.jsdelivr.net/npm/@wllama/wllama@2.3.4/esm/single-thread/wllama.wasm',
-                'multi-thread/wllama.wasm': 'https://cdn.jsdelivr.net/npm/@wllama/wllama@2.3.4/esm/multi-thread/wllama.wasm',
-                'multi-thread/wllama.worker.mjs': 'https://cdn.jsdelivr.net/npm/@wllama/wllama@2.3.4/esm/multi-thread/wllama.worker.mjs',
+                'single-thread/wllama.wasm': 'https://cdn.jsdelivr.net/npm/@wllama/wllama@2.3.6/esm/single-thread/wllama.wasm',
+                'multi-thread/wllama.wasm': 'https://cdn.jsdelivr.net/npm/@wllama/wllama@2.3.6/esm/multi-thread/wllama.wasm'
             }
         };
 

@@ -459,7 +459,9 @@ return (
                         id="model-selector"
                         value={selectedModel.id + '|' + selectedModel.provider}
                         onChange={(e) => {
-                            const [id, provider] = e.target.value.split('|');
+                            const parts = e.target.value.split('|');
+                            const provider = parts.pop();
+                            const id = parts.join('|');
                             const model = availableModels.find(m => m.id === id && m.provider === provider);
                             if (model) setSelectedModel(model);
                         }}
