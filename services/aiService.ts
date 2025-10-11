@@ -28,6 +28,10 @@ export const processRequest = async (
             case ModelProvider.Ollama:
                 // Note: Ollama doesn't support multimodal input via this service yet.
                 return await ollamaService.generateWithTools(userInput, systemInstruction, model.id, apiConfig, relevantTools);
+            case ModelProvider.HuggingFace:
+                // Note: HuggingFace implementation here doesn't support multimodal tool input.
+                // It will use text-based tool emulation. Files are ignored.
+                return await huggingFaceService.generateWithTools(userInput, systemInstruction, model.id, apiConfig, relevantTools);
             default:
                 throw new Error(`Model provider '${model.provider}' does not support tool generation.`);
         }

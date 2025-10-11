@@ -1,6 +1,47 @@
+
 import type { ToolCreatorPayload } from '../types';
 
 export const RESEARCH_TOOLS: ToolCreatorPayload[] = [
+    {
+        name: 'Generate Conceptual Queries from Objective',
+        description: 'Analyzes a research objective and existing literature to generate high-level conceptual questions for discovering novel, unstated synergies.',
+        category: 'Functional',
+        executionEnvironment: 'Client',
+        purpose: 'To steer the hypothesis generation process by creating abstract, "out-of-the-box" research questions that go beyond simple keyword searching.',
+        parameters: [
+            { name: 'researchObjective', type: 'string', description: 'The original high-level research goal.', required: true },
+            { name: 'validatedSources', type: 'array', description: 'An array of validated source objects to provide context.', required: true },
+        ],
+        implementationCode: `
+    const { researchObjective, validatedSources } = args;
+    const systemInstruction = \`You are an expert bioinformatics researcher specializing in identifying novel research vectors.
+Based on the user's high-level objective and the key findings from the provided literature summaries, generate 3 to 5 high-level conceptual questions designed to uncover novel, unstated synergies.
+Frame these questions in the format of "Find a compound/intervention that achieves [DESIRED_EFFECT] while avoiding [UNDESIRED_EFFECT]" or "What is the relationship between [MECHANISM_A] and [MECHANISM_B] in the context of aging?".
+Your goal is to provoke non-obvious connections.
+You MUST respond with ONLY a single, valid JSON object in the following format:
+{ "conceptual_queries": ["query 1", "query 2", ...] }
+Do not add any other text or markdown.\`;
+
+    const sourceSummaries = validatedSources.map(s => ({ title: s.title, summary: s.summary, reliability: s.reliabilityScore })).slice(0, 20); // Limit context size
+
+    const prompt = \`Research Objective: "\${researchObjective}"\\n\\nSummaries of Existing Literature:\\n\${JSON.stringify(sourceSummaries)}\\n\\nBased on the above, generate conceptual queries:\`;
+    
+    const aiResponseText = await runtime.ai.generateText(prompt, systemInstruction);
+    let queries = [];
+    try {
+        const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
+        if (!jsonMatch) throw new Error("No valid JSON response for conceptual queries.");
+        const parsed = JSON.parse(jsonMatch[0]);
+        queries = parsed.conceptual_queries;
+        if (!Array.isArray(queries) || queries.length === 0) throw new Error("AI did not generate a valid array of conceptual queries.");
+    } catch(e) {
+        throw new Error('Failed to generate conceptual queries: ' + e.message);
+    }
+    
+    runtime.logEvent(\`[Conceptualizer] Generated \${queries.length} conceptual queries.\`);
+    return { success: true, conceptual_queries: queries };
+    `
+    },
     {
         name: 'Refine Search Queries',
         description: 'Takes a high-level research objective and generates multiple specific, targeted search queries optimized for scientific databases. Includes a fallback mechanism for robustness.',
@@ -29,10 +70,21 @@ Do not add any text, explanations, or markdown formatting like \\\`\\\`\\\`json 
         let queries = [];
         try {
             const aiResponseText = await runtime.ai.generateText(prompt, systemInstruction);
-            const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
-            if (!jsonMatch) throw new Error("No JSON object found in the AI's response.");
             
-            const parsedJson = JSON.parse(jsonMatch[0]);
+            // More robust JSON extraction
+            let jsonString = '';
+            const jsonBlockMatch = aiResponseText.match(/\\\`\\\`\\\`json\\s*([\\s\\S]*?)\\s*\\\`\\\`\\\`/);
+            if (jsonBlockMatch && jsonBlockMatch[1]) {
+                jsonString = jsonBlockMatch[1];
+            } else {
+                const rawJsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
+                if (rawJsonMatch) {
+                    jsonString = rawJsonMatch[0];
+                }
+            }
+            if (!jsonString) throw new Error("No JSON object or JSON code block found in the AI's response.");
+
+            const parsedJson = JSON.parse(jsonString);
             if (parsedJson && Array.isArray(parsedJson.queries)) {
                 queries = parsedJson.queries;
                 runtime.logEvent('[Refine Queries] ✅ Generated ' + queries.length + ' queries via primary JSON method.');

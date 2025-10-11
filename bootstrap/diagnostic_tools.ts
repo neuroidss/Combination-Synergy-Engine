@@ -1,5 +1,3 @@
-
-
 import type { ToolCreatorPayload } from '../types';
 
 export const DIAGNOSTIC_TOOLS: ToolCreatorPayload[] = [
@@ -26,53 +24,37 @@ export const DIAGNOSTIC_TOOLS: ToolCreatorPayload[] = [
 **DIAGNOSTIC PROTOCOL:**
 
 1.  **Analyze and Classify the Error Category:** First, determine the single most likely root cause and classify it into one of these categories:
-    *   \`MODEL_INCAPABLE\`: The task was too complex for the AI model being used (e.g., a 'flash' model was asked to do complex reasoning or code generation). The prompt and tools were likely correct, but the model lacked the capability.
-    *   \`TOOL_BUG\`: The code within the \`failedToolSourceCode\` has a logical error, typo, or bug that caused the exception.
-    *   \`PROMPT_AMBIGUITY\`: The instructions given to the agent (in the objective or prior steps) were unclear, contradictory, or insufficient, leading the AI to make a mistake.
-    *   \`AGENT_LOGIC_ERROR\`: The AI chose the wrong tool for the job, provided incorrect arguments to a correct tool, or got stuck in a loop. This represents a flaw in the agent's reasoning, not the tool's code.
+    *   'MODEL_INCAPABLE': The task was too complex for the AI model being used (e.g., a 'flash' model was asked to do complex reasoning or code generation). The prompt and tools were likely correct, but the model lacked the capability.
+    *   'TOOL_BUG': The code within the \\\`failedToolSourceCode\\\` has a logical error, typo, or bug that caused the exception.
+    *   'PROMPT_AMBIGUITY': The instructions given to the agent (in the objective or prior steps) were unclear, contradictory, or insufficient, leading the AI to make a mistake.
+    *   'AGENT_LOGIC_ERROR': The AI chose the wrong tool for the job, provided incorrect arguments to a correct tool, or got stuck in a loop. This represents a flaw in the agent's reasoning, not the tool's code.
 
 2.  **Propose a Recovery Action:** Based on your classification, propose a single, specific recovery action from this list:
-    *   \`RETRY_WITH_STRONGER_MODEL\`: If the category was \`MODEL_INCAPABLE\`, recommend a more powerful model.
-    *   \`MODIFY_TOOL_CODE\`: If the category was \`TOOL_BUG\`, provide the corrected code.
-    *   \`SIMPLIFY_TASK\`: If the task is too complex, propose a simplified research objective or a new sequence of smaller tool calls.
-    *   \`REWRITE_PROMPT\`: If the prompt was ambiguous, provide a clearer version.
+    *   'RETRY_WITH_STRONGER_MODEL': If the category was 'MODEL_INCAPABLE', recommend a more powerful model.
+    *   'MODIFY_TOOL_CODE': If the category was 'TOOL_BUG', provide the corrected code.
+    *   'SIMPLIFY_TASK': If the task is too complex, propose a simplified research objective or a new sequence of smaller tool calls.
+    *   'REWRITE_PROMPT': If the prompt was ambiguous, provide a clearer version.
 
-3.  **Provide Parameters for the Action:** Supply the necessary data for your proposed action in the \`actionParameters\` object.
-    *   For \`RETRY_WITH_STRONGER_MODEL\`: \`{"suggestedModelId": "gemini-2.5-pro"}\`
-    *   For \`SIMPLIFY_TASK\`: \`{"simplifiedObjective": "New, simpler objective text."}\`
+3.  **Provide Parameters for the Action:** Supply the necessary data for your proposed action in the \\\`actionParameters\\\` object.
+    *   For 'RETRY_WITH_STRONGER_MODEL': \\\`{"suggestedModelId": "gemini-2.5-pro"}\\\`
+    *   For 'SIMPLIFY_TASK': \\\`{"simplifiedObjective": "New, simpler objective text."}\\\`
 
 4.  **Final Output:** You MUST call the 'RecordErrorAnalysis' tool with your complete, structured analysis. Your entire response must be ONLY this single tool call.\`;
 
-            const prompt = \`
-## FAILURE CONTEXT ##
-
-**High-Level Objective:**
-\${researchObjective}
-
-**Execution History (Simplified):**
-\${executionHistory}
-
-**Failed Action:**
-\${failedAction}
-
-**Error Message:**
-\${errorMessage}
-
-**AI Model Used:**
-\${modelUsed}
-
-**Source Code of Failed Tool (if applicable):**
-\`\`\`javascript
-\${failedToolSourceCode || 'N/A'}
-\`\`\`
-
-**Available Tools for Context:**
-\${availableTools}
-
-## YOUR TASK ##
-
-Follow the DIAGNOSTIC PROTOCOL precisely. Analyze the context, classify the error, propose a recovery action with parameters, and provide your diagnosis. Then, call the 'RecordErrorAnalysis' tool with your findings.
-\`;
+            // FIX: Replaced nested template literal with string concatenation to prevent parsing errors.
+            const prompt = '## FAILURE CONTEXT ##\\n\\n' +
+                '**High-Level Objective:**\\n' + researchObjective + '\\n\\n' +
+                '**Execution History (Simplified):**\\n' + executionHistory + '\\n\\n' +
+                '**Failed Action:**\\n' + failedAction + '\\n\\n' +
+                '**Error Message:**\\n' + errorMessage + '\\n\\n' +
+                '**AI Model Used:**\\n' + modelUsed + '\\n\\n' +
+                '**Source Code of Failed Tool (if applicable):**\\n' +
+                '\\\`\\\`\\\`javascript\\n' +
+                (failedToolSourceCode || 'N/A') + '\\n' +
+                '\\\`\\\`\\\`\\n\\n' +
+                '**Available Tools for Context:**\\n' + availableTools + '\\n\\n' +
+                '## YOUR TASK ##\\n\\n' +
+                'Follow the DIAGNOSTIC PROTOCOL precisely. Analyze the context, classify the error, propose a recovery action with parameters, and provide your diagnosis. Then, call the \\'RecordErrorAnalysis\\' tool with your findings.';
             
             const recordTool = runtime.tools.list().find(t => t.name === 'RecordErrorAnalysis');
             if (!recordTool) {
@@ -86,7 +68,7 @@ Follow the DIAGNOSTIC PROTOCOL precisely. Analyze the context, classify the erro
                 // The runtime's processRequest is enhanced to accept a model override.
                 const aiResponse = await runtime.ai.processRequest(prompt, systemInstruction, [recordTool], [], diagnosticModel);
                 
-                if (!aiResponse || !aiResponse.toolCalls || aiResponse.toolCalls.length === 0) {
+                if (!aiResponse || !aiResponse.toolCalls || !aiResponse.toolCalls.length === 0) {
                     throw new Error("The diagnostic AI failed to call the 'RecordErrorAnalysis' tool as instructed.");
                 }
                 

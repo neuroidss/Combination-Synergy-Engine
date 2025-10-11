@@ -1,3 +1,5 @@
+
+
 // VIBE_NOTE: Do not escape backticks or dollar signs in template literals in this file.
 // Escaping is only for 'implementationCode' strings in tool definitions.
 import React, { useCallback, useRef, useMemo } from 'react';
@@ -7,6 +9,7 @@ import { useToolRelevance } from './useToolRelevance';
 import { useSwarmManager } from './useSwarmManager';
 import * as aiService from '../services/aiService';
 import * as searchService from '../services/searchService';
+import * as embeddingService from '../services/embeddingService';
 import type { AIToolCall, EnrichedAIResponse, LLMTool, MainView, ToolCreatorPayload, ExecuteActionFunction, SearchResult, AIModel } from '../types';
 
 export const useAppRuntime = () => {
@@ -86,11 +89,14 @@ export const useAppRuntime = () => {
             enrichSource: (source: SearchResult, proxyUrl?: string) => searchService.enrichSource(source, stateManager.logEvent, proxyUrl),
         },
         ai: {
-            generateText: (text: string, systemInstruction: string, files: {name: string, type: string, data: string}[] = []) => {
+// FIX: Corrected the type of the 'files' parameter to match the expected type in aiService.
+// The original type included an unnecessary 'name' property, which could contribute to type inference failures.
+            generateText: (text: string, systemInstruction: string, files: { type: string, data: string }[] = []) => {
                 stateManager.setApiCallCount(prev => ({ ...prev, [stateManager.selectedModel.id]: (prev[stateManager.selectedModel.id] || 0) + 1 }));
                 return aiService.generateTextFromModel({ text, files }, systemInstruction, stateManager.selectedModel, stateManager.apiConfig, stateManager.logEvent);
             },
-            processRequest: (text: string, systemInstruction: string, tools: LLMTool[], files: {name: string, type: string, data: string}[] = [], modelOverride?: AIModel) => {
+// FIX: Corrected the type of the 'files' parameter to match the expected type in aiService.
+            processRequest: (text: string, systemInstruction: string, tools: LLMTool[], files: { type: string, data: string }[] = [], modelOverride?: AIModel) => {
                 const modelToUse = modelOverride || stateManager.selectedModel;
                 stateManager.setApiCallCount(prev => ({ ...prev, [modelToUse.id]: (prev[modelToUse.id] || 0) + 1 }));
                 return aiService.processRequest({ text, files }, systemInstruction, 'tool-runtime', tools, modelToUse, stateManager.apiConfig);
@@ -98,7 +104,8 @@ export const useAppRuntime = () => {
             search: (text: string) => {
                  stateManager.setApiCallCount(prev => ({ ...prev, [stateManager.selectedModel.id]: (prev[stateManager.selectedModel.id] || 0) + 1 }));
                  return aiService.contextualizeWithSearch({text, files: []}, stateManager.apiConfig, stateManager.selectedModel);
-            }
+            },
+            generateEmbeddings: (texts: string[]) => embeddingService.generateEmbeddings(texts, stateManager.logEvent),
         },
         getObservationHistory: () => [], // Placeholder for a more advanced feature
         clearObservationHistory: () => {}, // Placeholder

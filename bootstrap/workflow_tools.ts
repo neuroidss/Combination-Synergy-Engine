@@ -1,6 +1,7 @@
 
 
 
+
 import type { ToolCreatorPayload } from '../types';
 
 export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
@@ -130,6 +131,65 @@ export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
                  }
             }
              await new Promise(resolve => setTimeout(resolve, 500)); // Rate limit between sources
+        }
+
+        // Step 3.5: De Novo Hypothesis Generation
+        runtime.logEvent('[Workflow] Step 3.5: Building semantic space for de novo hypothesis generation...');
+        if (allValidatedSources.length > 0) {
+            try {
+                const chunkingResult = await runtime.tools.run('Chunk and Embed Scientific Articles', { validatedSources: allValidatedSources });
+                const vectorDB = chunkingResult.vectorDB;
+                
+                if (vectorDB && vectorDB.length > 0) {
+                    runtime.logEvent(\`[Workflow] ...semantic space created with \${vectorDB.length} chunks. Generating conceptual queries...\`);
+                    const conceptualQueriesResult = await runtime.tools.run('Generate Conceptual Queries from Objective', { researchObjective, validatedSources: allValidatedSources });
+                    const conceptualQueries = conceptualQueriesResult.conceptual_queries;
+
+                    if (conceptualQueries && conceptualQueries.length > 0) {
+                        for (const query of conceptualQueries) {
+                            runtime.logEvent(\`[Workflow] ...exploring concept: "\${query.substring(0, 80)}..."\`);
+                            // This tool finds ONE hypothesis and records it (unscored)
+                            const hypothesisResult = await runtime.tools.run('Hypothesis Generator via Conceptual Search', { 
+                                conceptualQuery: query, 
+                                vectorDB: vectorDB 
+                            });
+                            
+                            const newHypothesis = hypothesisResult.synergy;
+                            if (newHypothesis) {
+                                // Now, score this new hypothesis
+                                runtime.logEvent(\`[Workflow] ...scoring de novo hypothesis: \${newHypothesis.combination.map(c=>c.name).join(' + ')}\`);
+                                const scoringResult = await runtime.tools.run('Score Single Synergy', {
+                                    synergyToScore: newHypothesis,
+                                    backgroundSources: allValidatedSources
+                                });
+
+                                if (scoringResult.updatedSynergy) {
+                                    // Record the scored synergy. This will update the previous entry in the UI.
+                                     await runtime.tools.run('RecordSynergy', scoringResult.updatedSynergy);
+
+                                     // Generate game parameters for the newly scored hypothesis
+                                     runtime.logEvent(\`[Workflow] ...generating game parameters for de novo hypothesis.\`);
+                                     const paramsPrompt = \`Based on the synergy: \${JSON.stringify(scoringResult.updatedSynergy)}, call the 'RecordSynergyGameParameters' tool with appropriate numerical values. The 'synergyCombination' parameter must be an array of strings containing only the intervention names.\`;
+                                     const systemInstruction = "You are an expert system that translates scientific data into simulation parameters by calling the provided tool. Respond only with a tool call.";
+                                     try {
+                                         const aiResponse = await runtime.ai.processRequest(paramsPrompt, systemInstruction, [gameParamsTool]);
+                                         const toolCall = aiResponse?.toolCalls?.[0];
+                                         if (toolCall && toolCall.name === 'RecordSynergyGameParameters') {
+                                             toolCall.arguments.synergyCombination = scoringResult.updatedSynergy.combination.map(c => c.name);
+                                             await runtime.tools.run(toolCall.name, toolCall.arguments);
+                                         }
+                                     } catch(e) {
+                                         runtime.logEvent(\`[Workflow] WARN: Failed to generate game parameters for de novo hypothesis. Error: \${e.message}\`);
+                                     }
+                                }
+                            }
+                            await new Promise(resolve => setTimeout(resolve, 500)); // Rate limit
+                        }
+                    }
+                }
+            } catch (e) {
+                runtime.logEvent(\`[Workflow] WARN: De novo hypothesis generation step failed. Error: \${e.message}\`);
+            }
         }
 
         // Step 4: Final Summary

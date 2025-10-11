@@ -3,6 +3,151 @@ import type { ToolCreatorPayload } from '../types';
 
 export const ANALYSIS_TOOLS: ToolCreatorPayload[] = [
     {
+        name: 'Chunk and Embed Scientific Articles',
+        description: 'Processes the full text of validated scientific articles, breaking them into smaller, semantically meaningful chunks and converting each chunk into a vector embedding. This creates a "Semantic Knowledge Space" for conceptual search.',
+        category: 'Functional',
+        executionEnvironment: 'Client',
+        purpose: 'To transform a corpus of text documents into a machine-readable vector database, enabling similarity searches based on meaning rather than keywords.',
+        parameters: [
+            { name: 'validatedSources', type: 'array', description: 'An array of validated source objects, which must include a `textContent` field.', required: true },
+        ],
+        implementationCode: `
+    const { validatedSources } = args;
+    if (!validatedSources || validatedSources.length === 0) {
+        return { success: true, vectorDB: [] };
+    }
+
+    const allChunks = [];
+    const minChunkSize = 200; // characters
+    const maxChunkSize = 800; // characters
+
+    for (const source of validatedSources) {
+        if (!source.textContent) continue;
+
+        const paragraphs = source.textContent.split(/\\n\\s*\\n/);
+        for (const para of paragraphs) {
+            if (para.length < minChunkSize) continue;
+            
+            // If paragraph is too long, split it into sentences
+            if (para.length > maxChunkSize) {
+                const sentences = para.match(/[^.!?]+[.!?]+/g) || [para];
+                let currentChunk = '';
+                for (const sentence of sentences) {
+                    if (currentChunk.length + sentence.length > maxChunkSize) {
+                        allChunks.push({ text: currentChunk.trim(), sourceUri: source.url });
+                        currentChunk = '';
+                    }
+                    currentChunk += sentence + ' ';
+                }
+                if (currentChunk.trim().length > minChunkSize) {
+                    allChunks.push({ text: currentChunk.trim(), sourceUri: source.url });
+                }
+            } else {
+                allChunks.push({ text: para.trim(), sourceUri: source.url });
+            }
+        }
+    }
+
+    if (allChunks.length === 0) {
+        runtime.logEvent('[Embedder] No suitable text chunks found in sources for embedding.');
+        return { success: true, vectorDB: [] };
+    }
+    
+    runtime.logEvent(\`[Embedder] Created \${allChunks.length} text chunks. Now generating embeddings...\`);
+
+    // Batch embedding for efficiency
+    const chunkTexts = allChunks.map(c => c.text);
+    const embeddings = await runtime.ai.generateEmbeddings(chunkTexts);
+
+    const vectorDB = allChunks.map((chunk, index) => ({
+        ...chunk,
+        embedding: embeddings[index],
+    }));
+
+    runtime.logEvent(\`[Embedder] ✅ Successfully created vector database with \${vectorDB.length} entries.\`);
+    return { success: true, vectorDB };
+    `
+    },
+    {
+        name: 'Hypothesis Generator via Conceptual Search',
+        description: 'Performs a semantic search over a vector database of scientific text to find text chunks related to a conceptual query. It then uses an AI to synthesize a novel, de novo hypothesis from these disparate chunks and records it.',
+        category: 'Functional',
+        executionEnvironment: 'Client',
+        purpose: 'To generate completely new scientific hypotheses by finding non-obvious connections between pieces of information that may not be co-located in any single document.',
+        parameters: [
+            { name: 'conceptualQuery', type: 'string', description: 'The high-level conceptual question to investigate (e.g., "Find interventions that boost autophagy without affecting mTOR").', required: true },
+            { name: 'vectorDB', type: 'array', description: 'The vector database created by the "Chunk and Embed" tool.', required: true },
+        ],
+        implementationCode: `
+    const { conceptualQuery, vectorDB } = args;
+
+    if (!vectorDB || vectorDB.length === 0) {
+        throw new Error("Vector database is empty or not provided.");
+    }
+
+    const cosineSimilarity = (vecA, vecB) => {
+        if (!vecA || !vecB || vecA.length !== vecB.length) return 0;
+        let dotProduct = 0;
+        for (let i = 0; i < vecA.length; i++) {
+            dotProduct += vecA[i] * vecB[i];
+        }
+        return dotProduct;
+    };
+
+    runtime.logEvent(\`[Hypothesizer] Searching for concepts related to: "\${conceptualQuery}"\`);
+    const [queryEmbedding] = await runtime.ai.generateEmbeddings([conceptualQuery]);
+
+    const scoredChunks = vectorDB.map(chunk => ({
+        ...chunk,
+        score: cosineSimilarity(queryEmbedding, chunk.embedding),
+    })).sort((a, b) => b.score - a.score);
+
+    const topK = 10;
+    const similarityThreshold = 0.5;
+    const relevantChunks = scoredChunks.filter(c => c.score > similarityThreshold).slice(0, topK);
+
+    if (relevantChunks.length < 3) {
+        runtime.logEvent(\`[Hypothesizer] Found only \${relevantChunks.length} relevant chunks. Not enough to form a strong hypothesis. Skipping.\`);
+        return { success: true, synergy: null };
+    }
+    
+    runtime.logEvent(\`[Hypothesizer] Found \${relevantChunks.length} relevant text chunks. Synthesizing hypothesis...\`);
+
+    const contextForSynthesis = relevantChunks.map((c, i) => \`EVIDENCE \${i+1} (Source: \${c.sourceUri}, Similarity: \${c.score.toFixed(3)}):\\n"\${c.text}"\`).join('\\n\\n');
+
+    const systemInstruction = \`You are an expert bioinformatics researcher with a talent for synthesizing novel hypotheses from disparate data.
+Your task is to analyze the provided text fragments from multiple scientific papers and formulate a NEW synergistic therapeutic hypothesis that addresses the user's conceptual query.
+Then, you MUST call the 'RecordSynergy' tool to record your finding.
+
+**CRITICAL INSTRUCTIONS for the tool call:**
+1.  **combination**: Propose a specific combination of interventions (drugs, behaviors, etc.).
+2.  **status**: This MUST be set to "Hypothesized (De Novo)".
+3.  **summary**: Clearly explain your novel hypothesis and the scientific rationale based on the provided evidence.
+4.  **potentialRisks**: Extrapolate potential risks based on the mechanisms discussed in the evidence.
+
+Your entire response MUST be a single 'RecordSynergy' tool call. Do not add any other text.\`;
+    
+    const prompt = \`Conceptual Query: "\${conceptualQuery}"\\n\\nRelevant Evidence from Literature:\\n\${contextForSynthesis}\`;
+    
+    const recordSynergyTool = runtime.tools.list().find(t => t.name === 'RecordSynergy');
+    if (!recordSynergyTool) throw new Error("Core tool 'RecordSynergy' not found.");
+
+    const aiResponse = await runtime.ai.processRequest(prompt, systemInstruction, [recordSynergyTool]);
+    
+    const toolCall = aiResponse?.toolCalls?.[0];
+    if (!toolCall || toolCall.name !== 'RecordSynergy') {
+        let errorMsg = "Hypothesis synthesis AI failed to call 'RecordSynergy' tool.";
+        if (aiResponse && aiResponse.text) errorMsg += \` AI Response: \${aiResponse.text}\`;
+        throw new Error(errorMsg);
+    }
+    
+    // The RecordSynergy tool will log the data. We return its result.
+    const result = await runtime.tools.run('RecordSynergy', toolCall.arguments);
+    runtime.logEvent(\`[Hypothesizer] ✅ Successfully generated and recorded new de novo hypothesis.\`);
+    return result;
+    `
+    },
+    {
         name: 'Identify Meta-Analyses',
         description: 'Analyzes a list of validated scientific sources to classify them as either meta-analyses/reviews or primary studies by calling the appropriate recording tool for each source.',
         category: 'Functional',
