@@ -24,10 +24,7 @@ type ErrorBoundaryState = {
   hasError: boolean;
 };
 
-// FIX: The ErrorBoundary class was not being correctly interpreted as a React component,
-// leading to errors about missing 'props' and 'setState'. This is often caused by a missing
-// 'extends React.Component' clause. The class has been re-implemented to ensure it correctly
-// inherits from React.Component.
+// FIX: Correctly define the ErrorBoundary class with all its methods inside the class body.
 class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
   constructor(props: ErrorBoundaryProps) {
     super(props);

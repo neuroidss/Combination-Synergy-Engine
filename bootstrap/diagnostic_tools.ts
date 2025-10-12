@@ -54,7 +54,7 @@ export const DIAGNOSTIC_TOOLS: ToolCreatorPayload[] = [
                 '\\\`\\\`\\\`\\n\\n' +
                 '**Available Tools for Context:**\\n' + availableTools + '\\n\\n' +
                 '## YOUR TASK ##\\n\\n' +
-                'Follow the DIAGNOSTIC PROTOCOL precisely. Analyze the context, classify the error, propose a recovery action with parameters, and provide your diagnosis. Then, call the \\'RecordErrorAnalysis\\' tool with your findings.';
+                "Follow the DIAGNOSTIC PROTOCOL precisely. Analyze the context, classify the error, propose a recovery action with parameters, and provide your diagnosis. Then, call the 'RecordErrorAnalysis' tool with your findings.";
             
             const recordTool = runtime.tools.list().find(t => t.name === 'RecordErrorAnalysis');
             if (!recordTool) {
@@ -68,7 +68,7 @@ export const DIAGNOSTIC_TOOLS: ToolCreatorPayload[] = [
                 // The runtime's processRequest is enhanced to accept a model override.
                 const aiResponse = await runtime.ai.processRequest(prompt, systemInstruction, [recordTool], [], diagnosticModel);
                 
-                if (!aiResponse || !aiResponse.toolCalls || !aiResponse.toolCalls.length === 0) {
+                if (!aiResponse || !aiResponse.toolCalls || aiResponse.toolCalls.length === 0) {
                     throw new Error("The diagnostic AI failed to call the 'RecordErrorAnalysis' tool as instructed.");
                 }
                 

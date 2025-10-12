@@ -1,4 +1,5 @@
 
+
 import type { ToolCreatorPayload } from '../types';
 
 import { SERVER_MANAGEMENT_TOOLS } from '../framework/mcp';
@@ -58,68 +59,71 @@ const [allSources, setAllSources] = React.useState([]);
 const [mapData, setMapData] = React.useState([]);
 const [vacancies, setVacancies] = React.useState([]);
 const [isInterpreting, setIsInterpreting] = React.useState(false);
+const [isMapLoading, setIsMapLoading] = React.useState(false);
 
-const updateMapRealtime = React.useCallback((sources) => {
-    if (!sources || sources.length === 0) {
+const updateMapRealtime = React.useCallback(async (sources) => {
+    if (!sources || sources.length < 3) { // Need at least 3 points for a meaningful map
         setMapData([]);
         setVacancies([]);
         return;
     }
 
-    const mapSize = 500;
-    const newMapData = [];
-    const keywords = ['mTOR', 'autophagy', 'senolytic', 'epigenetic', 'mitochondria', 'inflammation', 'stem cell'];
-    const clusterCenters = keywords.map(() => ({
-        x: Math.random() * mapSize * 0.8 + mapSize * 0.1,
-        y: Math.random() * mapSize * 0.8 + mapSize * 0.1,
-    }));
+    setIsMapLoading(true);
+    runtime.logEvent('[Discovery Map] Change detected. Re-generating semantic map...');
+    try {
+        // Step 1: Embed all sources
+        const embedResult = await runtime.tools.run('Embed All Sources', { sources });
+        if (!embedResult || !embedResult.embeddedSources) {
+            throw new Error("Embedding step failed.");
+        }
+        const embeddedSources = embedResult.embeddedSources;
 
-    for (const source of sources) {
-        let assignedCluster = -1;
-        const sourceText = (source.title + ' ' + source.summary).toLowerCase();
-        
-        for (let i = 0; i < keywords.length; i++) {
-            if (sourceText.includes(keywords[i])) {
-                assignedCluster = i;
-                break;
+        // Step 2: Generate 2D coordinates using PCA
+        const mapGenResult = await runtime.tools.run('Generate 2D Map Coordinates', { embeddedSources });
+        if (!mapGenResult || !mapGenResult.mapData) {
+            throw new Error("Map coordinate generation step failed.");
+        }
+        const newMapData = mapGenResult.mapData;
+
+        // Step 3: Find vacancies using grid-based density
+        const newVacancies = [];
+        const mapSize = 500;
+        const gridSize = 20; // 20x20 grid
+        const cellSize = mapSize / gridSize;
+        const grid = Array(gridSize).fill(0).map(() => Array(gridSize).fill(0));
+
+        for (const point of newMapData) {
+            const gridX = Math.floor(point.x / cellSize);
+            const gridY = Math.floor(point.y / cellSize);
+            if (grid[gridX] && grid[gridX][gridY] !== undefined) {
+                grid[gridX][gridY]++;
             }
         }
-
-        let x, y;
-        if (assignedCluster !== -1) {
-            const center = clusterCenters[assignedCluster];
-            x = center.x + (Math.random() - 0.5) * (mapSize * 0.3);
-            y = center.y + (Math.random() - 0.5) * (mapSize * 0.3);
-        } else {
-            x = Math.random() * mapSize;
-            y = Math.random() * mapSize;
-        }
         
-        newMapData.push({
-            source,
-            x: Math.max(0, Math.min(mapSize, x)),
-            y: Math.max(0, Math.min(mapSize, y)),
-        });
-    }
-
-    const newVacancies = [];
-    const gridSize = 50;
-    const radius = 30;
-    for (let i = radius; i < mapSize; i += gridSize) {
-        for (let j = radius; j < mapSize; j += gridSize) {
-            const nearbyPoints = newMapData.filter(p => {
-                const dist = Math.sqrt(Math.pow(p.x - i, 2) + Math.pow(p.y - j, 2));
-                return dist < radius;
-            });
-            
-            if (nearbyPoints.length <= 1) {
-                newVacancies.push({ x: i, y: j, radius });
+        const vacancyThreshold = 1; // Cells with this many points or fewer are vacancies
+        for (let i = 0; i < gridSize; i++) {
+            for (let j = 0; j < gridSize; j++) {
+                if (grid[i][j] <= vacancyThreshold) {
+                    newVacancies.push({
+                        x: (i + 0.5) * cellSize, // Center of the cell
+                        y: (j + 0.5) * cellSize,
+                        radius: cellSize * 0.7, // Make radius slightly smaller than cell
+                    });
+                }
             }
         }
+        
+        setMapData(newMapData);
+        setVacancies(newVacancies);
+        runtime.logEvent(\`[Discovery Map] ✅ Map updated with \${newMapData.length} sources and \${newVacancies.length} potential vacancies.\`);
+
+    } catch (e) {
+        runtime.logEvent(\`[Discovery Map] ❌ Error generating map: \${e.message}\`);
+        // Don't clear map on error, keep the old one
+    } finally {
+        setIsMapLoading(false);
     }
-    setMapData(newMapData);
-    setVacancies(newVacancies);
-}, []);
+}, [runtime]);
 
 
 const handleInterpretVacancy = async (vacancy) => {
@@ -591,12 +595,17 @@ return (
         {/* Center Column: Discovery Map */}
         <div className="flex-1 h-full flex flex-col p-4 gap-4 border-r border-slate-700/50">
             <h2 className="text-2xl font-bold text-purple-300 drop-shadow-[0_0_8px_rgba(192,132,252,0.5)]">Live Discovery Map</h2>
-            <p className="text-sm text-slate-400 -mt-3">Visualizing the frontier of research in real-time.</p>
+            <p className="text-sm text-slate-400 -mt-3">A geometric projection of the real-time research landscape.</p>
             <div className="flex-grow w-full bg-black/40 rounded-lg border border-slate-700 relative overflow-hidden" style={{ minHeight: '400px', backgroundImage: 'linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px)', backgroundSize: '20px 20px'}}>
-                {isSwarmRunning && mapData.length === 0 && <LoadingIndicator message={progressInfo.message || 'Waiting for first sources to appear...'} />}
-                {!isSwarmRunning && mapData.length === 0 && (
+                {isMapLoading && (
+                     <div className="absolute inset-0 bg-black/50 backdrop-blur-sm z-20 flex items-center justify-center">
+                        <LoadingIndicator message="Generating semantic map..." />
+                    </div>
+                )}
+                {!isMapLoading && isSwarmRunning && mapData.length === 0 && <LoadingIndicator message={progressInfo.message || 'Waiting for first sources to appear...'} />}
+                {!isMapLoading && !isSwarmRunning && mapData.length === 0 && (
                     <div className="flex items-center justify-center h-full text-slate-500 text-center p-4">
-                        The map will be generated here once research begins.
+                        The semantic map will be generated here once research begins.
                     </div>
                 )}
                 {mapData.map(({ source, x, y }, i) => (
@@ -612,7 +621,7 @@ return (
                         onClick={() => handleInterpretVacancy(v)}
                         disabled={isInterpreting}
                         className="absolute bg-purple-500/20 rounded-full border-2 border-dashed border-purple-400 animate-pulse hover:animate-none hover:bg-purple-500/40 cursor-pointer transition-colors -translate-x-1/2 -translate-y-1/2 z-10 disabled:cursor-wait disabled:bg-purple-900/50" 
-                        style={{ left: \`\${(v.x/500)*100}%\`, top: \`\${(v.y/500)*100}%\`, width: \`\${v.radius * 2}px\`, height: \`\${v.radius * 2}px\` }}
+                        style={{ left: \`\${(v.x/500)*100}%\`, top: \`\${(v.y/500)*100}%\`, width: \`\${v.radius}px\`, height: \`\${v.radius}px\` }}
                         title="Click to interpret this research vacancy"
                     />
                 ))}

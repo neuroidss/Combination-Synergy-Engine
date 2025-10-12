@@ -89,13 +89,10 @@ export const useAppRuntime = () => {
             enrichSource: (source: SearchResult, proxyUrl?: string) => searchService.enrichSource(source, stateManager.logEvent, proxyUrl),
         },
         ai: {
-// FIX: Corrected the type of the 'files' parameter to match the expected type in aiService.
-// The original type included an unnecessary 'name' property, which could contribute to type inference failures.
             generateText: (text: string, systemInstruction: string, files: { type: string, data: string }[] = []) => {
                 stateManager.setApiCallCount(prev => ({ ...prev, [stateManager.selectedModel.id]: (prev[stateManager.selectedModel.id] || 0) + 1 }));
                 return aiService.generateTextFromModel({ text, files }, systemInstruction, stateManager.selectedModel, stateManager.apiConfig, stateManager.logEvent);
             },
-// FIX: Corrected the type of the 'files' parameter to match the expected type in aiService.
             processRequest: (text: string, systemInstruction: string, tools: LLMTool[], files: { type: string, data: string }[] = [], modelOverride?: AIModel) => {
                 const modelToUse = modelOverride || stateManager.selectedModel;
                 stateManager.setApiCallCount(prev => ({ ...prev, [modelToUse.id]: (prev[modelToUse.id] || 0) + 1 }));

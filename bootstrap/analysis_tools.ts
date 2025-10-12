@@ -3,6 +3,96 @@ import type { ToolCreatorPayload } from '../types';
 
 export const ANALYSIS_TOOLS: ToolCreatorPayload[] = [
     {
+        name: 'Embed All Sources',
+        description: 'Takes a list of validated scientific sources and generates a vector embedding for the content of each one.',
+        category: 'Functional',
+        executionEnvironment: 'Client',
+        purpose: 'To create a vectorized representation of the entire research corpus, which is the foundation for semantic mapping and analysis.',
+        parameters: [
+            { name: 'sources', type: 'array', description: 'An array of validated source objects, which must include a `title` and `summary`.', required: true },
+        ],
+        implementationCode: `
+    const { sources } = args;
+    if (!sources || sources.length === 0) {
+        return { success: true, embeddedSources: [] };
+    }
+
+    runtime.logEvent(\`[Embedder] Generating embeddings for \${sources.length} sources...\`);
+    
+    const textsToEmbed = sources.map(source => \`\${source.title}: \${source.summary}\`);
+    const embeddings = await runtime.ai.generateEmbeddings(textsToEmbed);
+
+    const embeddedSources = sources.map((source, index) => ({
+        ...source,
+        embedding: embeddings[index],
+    }));
+
+    runtime.logEvent(\`[Embedder] ✅ Successfully embedded \${embeddedSources.length} sources.\`);
+    return { success: true, embeddedSources };
+`
+    },
+    {
+        name: 'Generate 2D Map Coordinates',
+        description: 'Reduces the dimensionality of high-dimensional source embeddings to 2D coordinates (x, y) using Principal Component Analysis (PCA).',
+        category: 'Functional',
+        executionEnvironment: 'Client',
+        purpose: 'To project the semantic relationships from a high-dimensional vector space onto a 2D map for visualization, making the distance between points meaningful.',
+        parameters: [
+            { name: 'embeddedSources', type: 'array', description: 'An array of source objects, each of which must have an `embedding` field.', required: true },
+        ],
+        implementationCode: `
+    const { embeddedSources } = args;
+    if (!embeddedSources || embeddedSources.length < 3 || !embeddedSources[0].embedding) {
+        runtime.logEvent('[Mapper] Not enough embedded sources to generate a map (requires at least 3).');
+        return { success: true, mapData: [] };
+    }
+
+    // Dynamically import ml-pca
+    const { PCA } = await import('https://esm.sh/ml-pca');
+
+    const vectors = embeddedSources.map(source => source.embedding);
+
+    const pca = new PCA(vectors);
+    const coordinates = pca.predict(vectors, { nComponents: 2 }).to2DArray();
+    
+    // Add a check to ensure coordinates were computed correctly.
+    if (!coordinates || !Array.isArray(coordinates) || coordinates.length !== vectors.length || (coordinates.length > 0 && coordinates[0].length !== 2)) {
+        runtime.logEvent('[Mapper] ❌ PCA computation failed to return valid 2D coordinates.');
+        console.error('PCA result was invalid:', coordinates);
+        throw new Error("PCA computation failed to return valid 2D coordinates.");
+    }
+    
+    // Find min/max for normalization
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const coord of coordinates) {
+        if (coord[0] < minX) minX = coord[0];
+        if (coord[0] > maxX) maxX = coord[0];
+        if (coord[1] < minY) minY = coord[1];
+        if (coord[1] > maxY) maxY = coord[1];
+    }
+
+    const mapSize = 500; // The target size of the map canvas
+    const padding = mapSize * 0.05; // 5% padding
+
+    const mapData = embeddedSources.map((source, index) => {
+        const [x, y] = coordinates[index];
+        
+        // Normalize and scale coordinates to fit the map
+        const normalizedX = (x - minX) / (maxX - minX || 1);
+        const normalizedY = (y - minY) / (maxY - minY || 1);
+        
+        return {
+            source: source, // Keep the full source object including embedding
+            x: normalizedX * (mapSize - 2 * padding) + padding,
+            y: normalizedY * (mapSize - 2 * padding) + padding,
+        };
+    });
+    
+    runtime.logEvent(\`[Mapper] ✅ Generated 2D coordinates for \${mapData.length} sources.\`);
+    return { success: true, mapData };
+`
+    },
+    {
         name: 'Chunk and Embed Scientific Articles',
         description: 'Processes the full text of validated scientific articles, breaking them into smaller, semantically meaningful chunks and converting each chunk into a vector embedding. This creates a "Semantic Knowledge Space" for conceptual search.',
         category: 'Functional',
