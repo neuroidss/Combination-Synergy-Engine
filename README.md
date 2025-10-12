@@ -47,7 +47,7 @@ To explore cognitive enhancement, the objective is set to: *"Identify interventi
 
 Simply open the `index.html` file in a modern web browser (like Chrome or Edge). No installation or server is required to run the core application.
 
-### Evaluation of the Five Generated Hypotheses
+## Evaluation of the Five Generated Hypotheses
 
 The first two hypotheses build on the known synergy of spermidine and resveratrol, while the last three introduce PLCγ2 as a novel connecting hub.
 
