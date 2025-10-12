@@ -4,13 +4,13 @@ export const ORGANOID_SIMULATION_CODE = `
 const THEORIES = {
     stochastic: { name: 'Stochastic Damage', description: 'Aging results from accumulating random molecular damage.', stats: ['genomicInstability', 'telomereAttrition', 'proteostasisLoss', 'mitoDysfunction', 'synapticDensity'] },
     hyperfunction: { name: 'Programmed Hyperfunction', description: 'Aging is a harmful continuation of developmental programs.', stats: ['nutrientSensing', 'mitoDysfunction', 'cellularSenescence', 'inflammation', 'networkActivity'] },
-    information: { name: 'Information Entropy', description: 'Aging is the loss of epigenetic information and cellular identity.', stats: ['epigeneticAlterations', 'genomicInstability', 'proteostasisLoss', 'stemCellExhaustion', 'synapticDensity'] },
-    social: { name: 'Cellular Society Collapse', description: 'Aging is caused by "bad actor" cells disrupting tissue function.', stats: ['cellularSenescence', 'intercellularCommunication', 'inflammation', 'stemCellExhaustion', 'networkActivity'] },
+    information: { name: 'Information Entropy', description: 'Aging is the loss of epigenetic information and cellular identity.', stats: ['epigeneticAlterations', 'myelinIntegrity', 'proteostasisLoss', 'stemCellExhaustion', 'dendriticComplexity'] },
+    social: { name: 'Cellular Society Collapse', description: 'Aging is caused by "bad actor" cells disrupting tissue function.', stats: ['cellularSenescence', 'neurotransmitterBalance', 'inflammation', 'stemCellExhaustion', 'networkActivity'] },
 };
 const THEORY_KEYS = Object.keys(THEORIES);
 
 // --- ORGANOID STATE & SIMULATION ---
-// The state is now explicitly based on the 9 Hallmarks of Aging.
+// The state is now explicitly based on the 9 Hallmarks of Aging + new neural-specific metrics.
 const getInitialOrganoidState = () => ({
     // Foundational
     age: 0,
@@ -33,6 +33,10 @@ const getInitialOrganoidState = () => ({
     synapticDensity: 100,
     networkActivity: 100,
     stemCellFunction: 100, // A functional measure of the stem cell pool
+    // ** NEW Neural-Specific Metrics **
+    myelinIntegrity: 100, // Insulation for signal speed
+    neurotransmitterBalance: 100, // Chemical signaling efficiency
+    dendriticComplexity: 100, // Branching for learning/memory capacity
 });
 
 const getInitialInterventionEffects = () => ({
@@ -41,6 +45,8 @@ const getInitialInterventionEffects = () => ({
     mitoEfficiency: 1.0,        // Multiplier, higher is better
     nutrientSensing: 1.0,       // Multiplier, higher is better (inhibits deregulation)
     epigeneticStability: 1.0,   // Multiplier, higher is better
+    myelinRepair: 1.0,          // Multiplier, higher is better
+    neurotransmitterSupport: 1.0, // Multiplier, higher is better
 });
 
 
@@ -66,7 +72,6 @@ const runCoreAgingTick = (prev, effects, weights, theoryKey) => {
     }
     
     // 1. Update Primary Hallmarks (Sources of Damage)
-    // These now incorporate effects from other hallmarks.
     next.genomicInstability += (0.05 * ageFactor * weights.genomicInstability) / effects.genomicStability;
     next.telomereAttrition += (0.08 * ageFactor * weights.telomereAttrition) * (1 + next.genomicInstability / 200); // GI accelerates telomere loss
     next.epigeneticAlterations += (0.06 * ageFactor * weights.epigeneticAlterations) / effects.epigeneticStability;
@@ -88,17 +93,30 @@ const runCoreAgingTick = (prev, effects, weights, theoryKey) => {
     next.intercellularCommunication = (next.cellularSenescence / 100 * 0.6) + (next.nutrientSensing / 100 * 0.2) + (next.mitoDysfunction / 100 * 0.2);
     next.inflammation = next.intercellularCommunication * 1.2 * weights.inflammation;
     next.stemCellExhaustion += ((next.genomicInstability / 100 * 0.05) + (next.inflammation / 100 * 0.1) + (next.telomereAttrition / 100 * 0.08)) * ageFactor;
+    
+    // ** NEW: Update Neural Metrics **
+    next.myelinIntegrity -= (((next.inflammation / 100 * 0.1) + (next.mitoDysfunction / 100 * 0.05)) * ageFactor) / effects.myelinRepair;
+    next.neurotransmitterBalance -= (((next.proteostasisLoss / 100 * 0.1) + (next.epigeneticAlterations / 100 * 0.05)) * ageFactor) / effects.neurotransmitterSupport;
+    next.dendriticComplexity -= (((100 - next.synapticDensity) / 100 * 0.08 + next.stemCellExhaustion / 100 * 0.05)) * ageFactor;
+
 
     // Functional readouts are consequences of hallmark degradation
     next.stemCellFunction = 100 - next.stemCellExhaustion;
     next.synapticDensity -= ((next.inflammation / 100 * 0.15) + (next.proteostasisLoss / 100 * 0.1) + (next.epigeneticAlterations / 100 * 0.05)) * ageFactor;
-    next.networkActivity = next.synapticDensity * (1 - next.mitoDysfunction / 200); // Less severe impact from mito
+    // ** REVISED: More sophisticated network activity calculation **
+    next.networkActivity = (next.synapticDensity * 0.4) + (next.myelinIntegrity * 0.3) + (next.neurotransmitterBalance * 0.3);
 
     // Clamp integrative and functional hallmarks
-     Object.keys(next).forEach(key => {
-      if (['intercellularCommunication', 'inflammation', 'stemCellExhaustion', 'stemCellFunction', 'synapticDensity', 'networkActivity'].includes(key)) {
-        next[key] = Math.max(0, Math.min(100, next[key]));
-      }
+    Object.keys(next).forEach(key => {
+        const SUPER_NEURON_CAP = 200;
+        // Allow neural performance metrics to exceed 100%, enabling "superneuron" state.
+        if (['synapticDensity', 'networkActivity', 'myelinIntegrity', 'neurotransmitterBalance', 'dendriticComplexity'].includes(key)) {
+            next[key] = Math.max(0, Math.min(SUPER_NEURON_CAP, next[key]));
+        } 
+        // Keep other biological metrics capped at 100.
+        else if (['intercellularCommunication', 'inflammation', 'stemCellExhaustion', 'stemCellFunction'].includes(key)) {
+            next[key] = Math.max(0, Math.min(100, next[key]));
+        }
     });
     
     // 4. Calculate Overall Health (weighted average of functional outputs and key damage hallmarks)
@@ -113,14 +131,15 @@ const runCoreAgingTick = (prev, effects, weights, theoryKey) => {
         // Positive weights (function)
         stemCellFunction: 1.0,
         synapticDensity: 0.8,
-        networkActivity: 1.0,
+        networkActivity: 1.2, // Increased importance
+        myelinIntegrity: 1.0,
     };
     let weightedHealthSum = 0;
     let totalHealthWeight = 0;
     for (const hallmark in healthWeights) {
         const value = next[hallmark];
         const weight = healthWeights[hallmark];
-        const isPositive = ['stemCellFunction', 'synapticDensity', 'networkActivity'].includes(hallmark);
+        const isPositive = ['stemCellFunction', 'synapticDensity', 'networkActivity', 'myelinIntegrity'].includes(hallmark);
         const score = isPositive ? value : (100 - value);
         weightedHealthSum += score * weight;
         totalHealthWeight += weight;
@@ -180,4 +199,4 @@ const AGING_FUNCTIONS = {
         inflammation: 1.8,
     }, 'social'),
 };
-`;
+`

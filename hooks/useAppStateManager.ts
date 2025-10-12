@@ -20,12 +20,12 @@ export const useAppStateManager = () => {
         if (storedState?.apiConfig) {
             // Merge stored config with env vars, giving env vars precedence.
             setApiConfig(prevConfig => ({
-                googleAIAPIKey: prevConfig.googleAIAPIKey || storedState.apiConfig?.googleAIAPIKey || '',
-                openAIAPIKey: prevConfig.openAIAPIKey || storedState.apiConfig?.openAIAPIKey || '',
-                openAIBaseUrl: prevConfig.openAIBaseUrl || storedState.apiConfig?.openAIBaseUrl || '',
-                ollamaHost: prevConfig.ollamaHost || storedState.apiConfig?.ollamaHost || '',
+                ...prevConfig,
+                openAIAPIKey: storedState.apiConfig?.openAIAPIKey || '',
+                openAIBaseUrl: storedState.apiConfig?.openAIBaseUrl || '',
+                ollamaHost: storedState.apiConfig?.ollamaHost || '',
             }));
-            console.log("Loaded API config from storage.", storedState.apiConfig);
+            console.log("Loaded non-Google API config from storage.", storedState.apiConfig);
         }
         // Initialize with a welcome message
         setEventLog([`[${new Date().toLocaleTimeString()}] [SYSTEM] Session started.`]);
@@ -41,7 +41,7 @@ export const useAppStateManager = () => {
         // Create a version of the config that only includes user-set values,
         // not ones from process.env, to avoid writing them to localStorage.
         const configToSave: APIConfig = {
-            googleAIAPIKey: apiConfig.googleAIAPIKey === process.env.GEMINI_API_KEY ? undefined : apiConfig.googleAIAPIKey,
+            googleAIAPIKey: undefined, // Never save Google AI key
             openAIAPIKey: apiConfig.openAIAPIKey,
             openAIBaseUrl: apiConfig.openAIBaseUrl,
             ollamaHost: apiConfig.ollamaHost,

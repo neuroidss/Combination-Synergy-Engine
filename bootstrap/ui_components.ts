@@ -1,3 +1,4 @@
+
 export const UI_COMPONENTS_CODE = `
 const InterventionTypeIcon = ({ type }) => {
     const typeMap = {
@@ -18,7 +19,7 @@ const OrganoidStat = ({label, value, unit, inverted = false}) => {
     const numericValue = parseFloat(value);
     if (isNaN(numericValue)) {
          return (
-            <div className="text-center bg-black/30 p-2 rounded-lg border border-slate-700">
+            <div className="text-center bg-black/30 p-2 rounded-lg border border-slate-700/50">
                 <div className="text-xs text-cyan-300 uppercase tracking-wider whitespace-nowrap">{label}</div>
                 <div className='text-lg font-bold text-slate-200 capitalize'>{value}</div>
             </div>
@@ -26,10 +27,18 @@ const OrganoidStat = ({label, value, unit, inverted = false}) => {
     }
 
     let colorClass;
+    let valueClass = 'font-bold';
     if (!inverted) { // Higher is better
-        if (numericValue < 40) colorClass = 'text-red-400';
-        else if (numericValue < 70) colorClass = 'text-yellow-400';
-        else colorClass = 'text-emerald-400';
+        if (numericValue > 100) {
+            colorClass = 'text-cyan-300';
+            valueClass = 'font-bold animate-pulse'; // Add a pulse effect for "super" stats
+        } else if (numericValue < 40) {
+            colorClass = 'text-red-400';
+        } else if (numericValue < 70) {
+            colorClass = 'text-yellow-400';
+        } else {
+            colorClass = 'text-emerald-400';
+        }
     } else { // Lower is better
         if (numericValue > 60) colorClass = 'text-red-400';
         else if (numericValue > 30) colorClass = 'text-yellow-400';
@@ -37,9 +46,9 @@ const OrganoidStat = ({label, value, unit, inverted = false}) => {
     }
 
     return (
-        <div className="text-center bg-black/30 p-2 rounded-lg border border-slate-700">
+        <div className="text-center bg-black/30 p-2 rounded-lg border border-slate-700/50">
             <div className="text-xs text-cyan-300 uppercase tracking-wider whitespace-nowrap">{label}</div>
-            <div className={\`text-lg font-bold \${colorClass}\`}>{value} <span className="text-sm font-normal text-slate-400">{unit}</span></div>
+            <div className={\`text-lg \${valueClass} \${colorClass}\`}>{value} <span className="text-sm font-normal text-slate-400">{unit}</span></div>
         </div>
     );
 };
@@ -89,9 +98,22 @@ const AgingClock = ({ name, biologicalAge, chronologicalAge }) => {
 
 const SourceCard = ({source}) => (
     <div className="bg-slate-800/60 p-3 rounded-lg border border-slate-700 transition-colors hover:border-cyan-500/80 hover:bg-slate-800">
-        <button onClick={() => window.open(source.url, '_blank', 'noopener,noreferrer')} className="text-cyan-400 hover:underline font-semibold block truncate text-left w-full">{source.title}</button>
+        <button onClick={() => window.open(source.url || source.uri, '_blank', 'noopener,noreferrer')} className="text-cyan-400 hover:underline font-semibold block truncate text-left w-full">{source.title}</button>
         <p className="text-xs text-slate-500 mt-1">Reliability: {(source.reliabilityScore * 100).toFixed(0)}% - {source.justification}</p>
         <p className="text-sm text-slate-300 mt-2">{source.summary}</p>
+    </div>
+);
+
+const InterpretationCard = ({ interpretation }) => (
+    <div className="bg-slate-800/60 p-3 rounded-lg border-2 border-dashed border-purple-500/80">
+        <h4 className="text-base font-bold text-purple-300 mb-2">Hypothetical Research Abstract</h4>
+        <p className="text-sm text-slate-200 whitespace-pre-wrap mb-3">{interpretation.hypotheticalAbstract}</p>
+        <div className="pt-3 border-t border-slate-700">
+            <h5 className="font-semibold text-cyan-300 mb-2 text-xs uppercase tracking-wider">Based on the gap between:</h5>
+            <ul className="list-disc list-inside space-y-1 text-xs text-slate-400">
+                {interpretation.neighbors.map((n, i) => <li key={i} className="truncate">{n.title}</li>)}
+            </ul>
+        </div>
     </div>
 );
 
@@ -112,25 +134,8 @@ const MoaScoreIndicator = ({ score, justification }) => {
     return (
         <div className="relative flex items-center justify-center group">
             <svg width={size} height={size} viewBox={\`0 0 \${size} \${size}\`} className="transform -rotate-90">
-                <circle
-                    className="stroke-slate-700"
-                    strokeWidth={strokeWidth}
-                    fill="transparent"
-                    r={radius}
-                    cx={size / 2}
-                    cy={size / 2}
-                />
-                <circle
-                    className={\`transition-all duration-1000 ease-out \${colorClass}\`}
-                    strokeWidth={strokeWidth}
-                    strokeDasharray={circumference}
-                    strokeDashoffset={offset}
-                    strokeLinecap="round"
-                    fill="transparent"
-                    r={radius}
-                    cx={size / 2}
-                    cy={size / 2}
-                />
+                <circle className="stroke-slate-700" strokeWidth={strokeWidth} fill="transparent" r={radius} cx={size / 2} cy={size / 2} />
+                <circle className={\`transition-all duration-1000 ease-out \${colorClass}\`} strokeWidth={strokeWidth} strokeDasharray={circumference} strokeDashoffset={offset} strokeLinecap="round" fill="transparent" r={radius} cx={size / 2} cy={size / 2} />
             </svg>
             <span className={\`absolute text-base font-bold \${colorClass}\`}>{score}</span>
             <div className="absolute left-full ml-2 w-64 bg-slate-800 text-white text-xs rounded-lg p-2 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none z-10 border border-slate-600 shadow-lg">
@@ -148,9 +153,7 @@ const TheoryAlignmentChart = ({ scores }) => {
         { key: 'information', name: 'Information', color: 'bg-purple-500' },
         { key: 'social', name: 'Social', color: 'bg-orange-500' },
     ];
-
     const maxScore = 100;
-
     return (
         <div className="w-full space-y-1.5 mt-2">
             <h4 className="text-xs font-semibold text-slate-300 text-center">Theory Alignment</h4>
@@ -161,10 +164,7 @@ const TheoryAlignmentChart = ({ scores }) => {
                     <div key={theory.key} className="flex items-center gap-2 group relative">
                         <span className="text-xs text-slate-400 w-16 text-right flex-shrink-0">{theory.name}</span>
                         <div className="w-full bg-slate-700 rounded-full h-3">
-                            <div
-                                className={\`\${theory.color} h-3 rounded-full transition-all duration-1000 ease-out\`}
-                                style={{ width: \`\${widthPercentage}%\` }}
-                            ></div>
+                            <div className={\`\${theory.color} h-3 rounded-full transition-all duration-1000 ease-out\`} style={{ width: \`\${widthPercentage}%\` }}></div>
                         </div>
                         <span className="text-xs font-bold text-slate-200 w-6 text-left">{score}</span>
                     </div>
@@ -174,12 +174,11 @@ const TheoryAlignmentChart = ({ scores }) => {
     );
 };
 
-const SynergyCard = ({synergy, actions}) => {
-    const isHypothesized = synergy.status === 'Hypothesized';
+const SynergyCard = ({synergy, actions, applySynergy, anyOrganoidAlive}) => {
+    const isHypothesized = synergy.status.includes('Hypothesized');
     return (
         <div className={\`bg-slate-800/60 p-4 rounded-lg border border-slate-700 flex flex-col transition-colors \${isHypothesized ? 'hover:border-purple-500/80' : 'hover:border-emerald-500/80'} hover:bg-slate-800\`}>
             <div className="flex justify-between items-start gap-4">
-                {/* Main Content Column */}
                 <div className="flex-grow flex flex-col" style={{minWidth: 0}}>
                     <h4 className={\`text-lg font-bold flex items-center flex-wrap gap-x-2 gap-y-1 \${isHypothesized ? 'text-purple-400' : 'text-emerald-400'}\`}>
                         {synergy.combination.map((c, i) => (
@@ -204,18 +203,13 @@ const SynergyCard = ({synergy, actions}) => {
                      {synergy.sourceUri && (
                         <div className="mt-auto pt-2 border-t border-slate-700/50">
                             <p className="text-xs text-slate-500">Source:</p>
-                            <button 
-                                onClick={() => window.open(synergy.sourceUri, '_blank', 'noopener,noreferrer')}
-                                className="text-xs text-cyan-500 hover:underline truncate block text-left w-full"
-                                title={\`Open source in new tab: \${synergy.sourceUri}\`}
-                            >
+                            <button onClick={() => window.open(synergy.sourceUri, '_blank', 'noopener,noreferrer')} className="text-xs text-cyan-500 hover:underline truncate block text-left w-full" title={\`Open source in new tab: \${synergy.sourceUri}\`}>
                                 {synergy.sourceTitle || synergy.sourceUri}
                             </button>
                         </div>
                     )}
                 </div>
 
-                {/* Scoring Column */}
                 <div className="flex-shrink-0 w-48 bg-black/30 p-3 rounded-lg border border-slate-700/50 flex flex-col items-center gap-2">
                      <div className="text-center">
                          <div className={\`text-4xl font-bold \${synergy.trialPriorityScore > 75 ? 'text-emerald-300' : synergy.trialPriorityScore > 50 ? 'text-yellow-300' : 'text-red-300'} drop-shadow-[0_0_8px_rgba(255,255,255,0.2)]\`}>
@@ -230,8 +224,16 @@ const SynergyCard = ({synergy, actions}) => {
                      <TheoryAlignmentChart scores={synergy.theoryAlignmentScores || {}} />
                 </div>
             </div>
-            <div className="mt-4">
+            <div className="mt-4 flex items-center justify-between gap-4">
                 {actions}
+                <button 
+                    onClick={() => applySynergy(synergy)} 
+                    disabled={!anyOrganoidAlive || !synergy.gameParameters} 
+                    className={\`font-bold py-1.5 px-3 rounded-lg self-start transition-colors \${isHypothesized ? 'bg-purple-600 hover:bg-purple-500' : 'bg-emerald-600 hover:bg-emerald-500'} disabled:bg-slate-600 disabled:cursor-not-allowed\`}
+                    title={synergy.gameParameters ? "Apply this combination to the live organoid simulations" : "Simulation parameters have not been generated for this synergy."}
+                >
+                    {synergy.gameParameters ? 'Apply to Organoids' : 'No Parameters'}
+                </button>
             </div>
         </div>
     );
@@ -241,39 +243,18 @@ const RiskRadarChart = ({ scientific = 0, commercial = 0, safety = 0 }) => {
     const size = 120;
     const center = size / 2;
     const radius = size * 0.4;
-
-    const getPoint = (angle, score) => {
-        const value = Math.max(0, Math.min(100, score)) / 100 * radius;
-        const x = center + value * Math.cos(angle);
-        const y = center + value * Math.sin(angle);
-        return { x, y };
-    };
-
-    const angleSci = -Math.PI / 2; // Top
-    const angleCom = (7 * Math.PI) / 6; // Bottom left
-    const angleSaf = (11 * Math.PI) / 6; // Bottom right
-
-    const pSci = getPoint(angleSci, scientific);
-    const pCom = getPoint(angleCom, commercial);
-    const pSaf = getPoint(angleSaf, safety);
-
+    const getPoint = (angle, score) => ({ x: center + (Math.max(0, Math.min(100, score)) / 100 * radius) * Math.cos(angle), y: center + (Math.max(0, Math.min(100, score)) / 100 * radius) * Math.sin(angle) });
+    const angleSci = -Math.PI / 2, angleCom = (7 * Math.PI) / 6, angleSaf = (11 * Math.PI) / 6;
+    const pSci = getPoint(angleSci, scientific), pCom = getPoint(angleCom, commercial), pSaf = getPoint(angleSaf, safety);
     const points = \`\${pSci.x},\${pSci.y} \${pCom.x},\${pCom.y} \${pSaf.x},\${pSaf.y}\`;
-
-    const axisPoints = [
-        getPoint(angleSci, 100),
-        getPoint(angleCom, 100),
-        getPoint(angleSaf, 100),
-    ];
-
+    const axisPoints = [getPoint(angleSci, 100), getPoint(angleCom, 100), getPoint(angleSaf, 100)];
     return (
         <svg viewBox={\`0 0 \${size} \${size}\`} className="w-28 h-28">
             <polygon points={\`\${axisPoints[0].x},\${axisPoints[0].y} \${axisPoints[1].x},\${axisPoints[1].y} \${axisPoints[2].x},\${axisPoints[2].y}\`} fill="rgba(203, 213, 225, 0.05)" />
             <line x1={center} y1={center} x2={axisPoints[0].x} y2={axisPoints[0].y} stroke="rgba(203, 213, 225, 0.2)" strokeWidth="1" />
             <line x1={center} y1={center} x2={axisPoints[1].x} y2={axisPoints[1].y} stroke="rgba(203, 213, 225, 0.2)" strokeWidth="1" />
             <line x1={center} y1={center} x2={axisPoints[2].x} y2={axisPoints[2].y} stroke="rgba(203, 213, 225, 0.2)" strokeWidth="1" />
-            
             <polygon points={points} fill="rgba(248, 113, 113, 0.4)" stroke="rgb(248, 113, 113)" strokeWidth="1.5" />
-
             <text x={axisPoints[0].x} y={axisPoints[0].y - 5} fill="white" fontSize="10" textAnchor="middle">Sci</text>
             <text x={axisPoints[1].x - 8} y={axisPoints[1].y + 5} fill="white" fontSize="10" textAnchor="end">Com</text>
             <text x={axisPoints[2].x + 8} y={axisPoints[2].y + 5} fill="white" fontSize="10" textAnchor="start">Safe</text>
@@ -281,38 +262,22 @@ const RiskRadarChart = ({ scientific = 0, commercial = 0, safety = 0 }) => {
     );
 };
 
-
 const CritiqueView = ({ critique }) => (
     <div className="mt-4 bg-blue-900/40 border border-blue-700 p-3 rounded-lg">
         <h4 className="text-lg font-bold text-cyan-200 mb-2">Critical Analysis</h4>
-        
-        <div className="mb-3">
-            <h5 className="font-semibold text-emerald-300 mb-1">Strengths</h5>
-            <p className="text-sm text-slate-300">{critique.strengths}</p>
-        </div>
-        
-        <div className="mb-3">
-            <h5 className="font-semibold text-yellow-300 mb-1">Weaknesses & Risks</h5>
-            <p className="text-sm text-slate-300">{critique.weaknesses}</p>
-        </div>
-
-        {critique.contradictoryEvidence && critique.contradictoryEvidence.length > 0 && (
+        <div className="mb-3"><h5 className="font-semibold text-emerald-300 mb-1">Strengths</h5><p className="text-sm text-slate-300">{critique.strengths}</p></div>
+        <div className="mb-3"><h5 className="font-semibold text-yellow-300 mb-1">Weaknesses & Risks</h5><p className="text-sm text-slate-300">{critique.weaknesses}</p></div>
+        {critique.contradictoryEvidence?.length > 0 && (
             <div className="mb-3">
                 <h5 className="font-semibold text-red-300 mb-1">Contradictory Evidence</h5>
-                <ul className="list-disc list-inside text-sm text-slate-300 space-y-1">
-                    {critique.contradictoryEvidence.map((ev, i) => <li key={i}>{ev}</li>)}
-                </ul>
+                <ul className="list-disc list-inside text-sm text-slate-300 space-y-1">{critique.contradictoryEvidence.map((ev, i) => <li key={i}>{ev}</li>)}</ul>
             </div>
         )}
-
-        <div>
-             <h5 className="font-semibold text-cyan-300 mb-1">Overall Verdict</h5>
-             <p className="text-sm font-bold text-white">{critique.overallVerdict}</p>
-        </div>
+        <div><h5 className="font-semibold text-cyan-300 mb-1">Overall Verdict</h5><p className="text-sm font-bold text-white">{critique.overallVerdict}</p></div>
     </div>
 );
 
-const DossierCard = ({ dossier, critique, synergy }) => {
+const DossierCard = ({ dossier, synergy }) => {
     const riskAnalysis = dossier.riskAnalysis || {};
     const overallRisk = riskAnalysis.overallRiskScore || 0;
     let riskColorClass = 'text-red-400';
@@ -337,7 +302,7 @@ const DossierCard = ({ dossier, critique, synergy }) => {
                      <p className="text-sm text-slate-400 mt-1">{dossier.executiveSummary}</p>
                 </div>
                  <div className="flex-shrink-0 text-center">
-                    <div className={\`text-5xl font-bold \${synergy.trialPriorityScore > 75 ? 'text-emerald-300' : synergy.trialPriorityScore > 50 ? 'text-yellow-300' : 'text-red-300'} drop-shadow-[0_0_8px_rgba(255,255,255,0.2)]\`}>
+                    <div className={\`text-5xl font-bold \${(synergy.trialPriorityScore||0) > 75 ? 'text-emerald-300' : (synergy.trialPriorityScore||0) > 50 ? 'text-yellow-300' : 'text-red-300'} drop-shadow-[0_0_8px_rgba(255,255,255,0.2)]\`}>
                         {synergy.trialPriorityScore || 0}
                      </div>
                      <div className="text-xs uppercase tracking-wider text-slate-400">Opportunity Score</div>
@@ -345,7 +310,6 @@ const DossierCard = ({ dossier, critique, synergy }) => {
             </div>
             
              <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Risk Analysis Section */}
                 <div className="bg-black/30 p-3 rounded-md border border-slate-700">
                     <h4 className="font-semibold text-red-300 mb-2 text-center">Risk Analysis</h4>
                     <div className="flex items-center justify-around gap-2">
@@ -357,7 +321,6 @@ const DossierCard = ({ dossier, critique, synergy }) => {
                     </div>
                     <p className="text-xs text-slate-400 mt-2 text-center">{riskAnalysis.riskSummary}</p>
                 </div>
-                {/* Mitigation Plan Section */}
                 <div className="bg-black/30 p-3 rounded-md border border-slate-700 flex flex-col">
                     <h4 className="font-semibold text-emerald-300 mb-2 text-center">Mitigation Plan (Risk Insurance)</h4>
                     <p className="text-sm text-slate-300 flex-grow">{dossier.mitigationPlan}</p>
@@ -371,64 +334,43 @@ const DossierCard = ({ dossier, critique, synergy }) => {
             <details className="text-sm">
                 <summary className="cursor-pointer text-cyan-400 hover:underline">Show Full Rationale & Details...</summary>
                 <div className="mt-3 space-y-4 pt-3 border-t border-slate-700/50">
-                    <div>
-                        <h4 className="font-semibold text-cyan-300 mb-1">Scientific Rationale</h4>
-                        <p className="text-sm text-slate-300">{dossier.scientificRationale}</p>
-                    </div>
-                    <div className="bg-black/30 p-3 rounded-md border border-slate-700">
-                        <h4 className="font-semibold text-emerald-300 mb-1">In Silico Validation (SynergyForge)</h4>
-                        <p className="text-sm text-slate-300 font-mono">{dossier.inSilicoValidation}</p>
-                    </div>
-                    <div>
-                        <h4 className="font-semibold text-cyan-300 mb-1">Market & IP Opportunity</h4>
-                        <p className="text-sm text-slate-300">{dossier.marketAndIP}</p>
-                    </div>
-                    <div>
-                        <h4 className="font-semibold text-cyan-300 mb-1">Proposed Roadmap</h4>
-                        <p className="text-sm text-slate-300">{dossier.roadmap}</p>
-                    </div>
+                    <div><h4 className="font-semibold text-cyan-300 mb-1">Scientific Rationale</h4><p className="text-sm text-slate-300">{dossier.scientificRationale}</p></div>
+                    <div className="bg-black/30 p-3 rounded-md border border-slate-700"><h4 className="font-semibold text-emerald-300 mb-1">In Silico Validation (SynergyForge)</h4><p className="text-sm text-slate-300 font-mono">{dossier.inSilicoValidation}</p></div>
+                    <div><h4 className="font-semibold text-cyan-300 mb-1">Market & IP Opportunity</h4><p className="text-sm text-slate-300">{dossier.marketAndIP}</p></div>
+                    <div><h4 className="font-semibold text-cyan-300 mb-1">Proposed Roadmap</h4><p className="text-sm text-slate-300">{dossier.roadmap}</p></div>
                 </div>
             </details>
             
-            {critique && <CritiqueView critique={critique} />}
+            {dossier.critique && <CritiqueView critique={dossier.critique} />}
         </div>
     );
 };
 
 const ProgressTracker = ({ progress, isRunning }) => {
     if (!isRunning || progress.total === 0) return null;
-
     const percent = progress.total > 0 ? (progress.step / progress.total) * 100 : 0;
-    
     const formatEta = (seconds) => {
         if (seconds <= 0 || !isFinite(seconds)) return 'Calculating...';
         if (seconds < 60) return \`~\${Math.round(seconds)}s\`;
         const minutes = Math.floor(seconds / 60);
-        const remainingSeconds = Math.round(seconds % 60);
-        return \`~\${minutes}m \${remainingSeconds}s\`;
+        return \`~\${minutes}m \${Math.round(seconds % 60)}s\`;
     };
-
     return (
         <div className="flex flex-col gap-2 mt-4">
             <div className="flex justify-between items-center text-xs text-slate-400">
                 <span className="font-semibold text-cyan-300">Workflow In Progress...</span>
                 <span>ETA: {formatEta(progress.eta)}</span>
             </div>
-            <div className="w-full bg-slate-700 rounded-full h-2.5 dark:bg-gray-700">
-                <div 
-                    className="bg-gradient-to-r from-cyan-400 to-blue-500 h-2.5 rounded-full transition-all duration-500 ease-linear" 
-                    style={{width: \`\${percent}%\`}}>
-                </div>
-            </div>
+            <div className="w-full bg-slate-700 rounded-full h-2.5"><div className="bg-gradient-to-r from-cyan-400 to-blue-500 h-2.5 rounded-full transition-all duration-500 ease-linear" style={{width: \`\${percent}%\`}}></div></div>
             <p className="text-sm text-slate-300 text-center truncate">Step {progress.step}/{progress.total}: {progress.message}</p>
         </div>
     );
 };
 
 const LoadingIndicator = ({ message }) => (
-    <div className="flex flex-col items-center justify-center gap-2 text-slate-400 p-4">
+    <div className="flex flex-col items-center justify-center h-full gap-2 text-slate-400 p-4">
         <svg className="animate-spin h-6 w-6 text-cyan-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
         <span>{message || 'Working...'}</span>
     </div>
 );
-`
+`;

@@ -135,6 +135,9 @@ export const DATA_RECORDER_TOOLS: ToolCreatorPayload[] = [
             { name: 'signaling_pathway_inhibition', type: 'number', description: 'Multiplier for inhibiting harmful developmental signals (e.g., 1.15 for 15% inhibition).', required: false },
             { name: 'synaptic_density_boost', type: 'number', description: 'Value from 0.0 to 100.0 for direct increase in synaptic density.', required: false },
             { name: 'toxicity_impact', type: 'number', description: 'Value from 0.0 to 100.0 representing the negative health impact or toxicity.', required: false },
+            { name: 'myelin_repair_boost', type: 'number', description: 'Multiplier for myelin repair processes (e.g., 1.3 for a 30% boost).', required: false },
+            { name: 'neurotransmitter_stabilization', type: 'number', description: 'Multiplier for neurotransmitter balance and efficiency (e.g., 1.2 for 20% improvement).', required: false },
+            { name: 'dendritic_arborization_factor', type: 'number', description: 'Value from 0.0 to 100.0 for direct increase in dendritic complexity.', required: false },
         ],
         implementationCode: `
             const { synergyCombination, ...rest } = args;

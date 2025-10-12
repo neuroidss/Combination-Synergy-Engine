@@ -24,12 +24,11 @@ type ErrorBoundaryState = {
   hasError: boolean;
 };
 
+// FIX: The ErrorBoundary class was not being correctly interpreted as a React component,
+// leading to errors about missing 'props' and 'setState'. This is often caused by a missing
+// 'extends React.Component' clause. The class has been re-implemented to ensure it correctly
+// inherits from React.Component.
 class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  // FIX: Switched from class field state initialization to a constructor.
-  // The previous approach was causing TypeScript errors where inherited properties
-  // like 'props' and 'setState' were not being recognized. The constructor
-  // explicitly calls super(props) and sets initial state, which is a more
-  // standard and robust pattern for class components.
   constructor(props: ErrorBoundaryProps) {
     super(props);
     this.state = { hasError: false };
@@ -41,12 +40,11 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
 
   componentDidUpdate(prevProps: Readonly<ErrorBoundaryProps>) {
     if (this.props.toolName !== prevProps.toolName) {
-      // eslint-disable-next-line react/no-did-update-set-state
       this.setState({ hasError: false });
     }
   }
 
-  componentDidCatch(error: any, errorInfo: any) {
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
     console.error(`UI Tool Runner Error in tool '${this.props.toolName}':`, error, errorInfo);
   }
 

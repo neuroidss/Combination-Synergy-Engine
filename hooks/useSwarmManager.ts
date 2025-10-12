@@ -179,8 +179,10 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
 
         try {
             const simplifiedHistory = swarmHistoryRef.current.map(h => 
-                `Tool: ${h.toolCall?.name || 'N/A'}, Args: ${JSON.stringify(h.toolCall?.arguments)}, Result: ${h.executionError ? `ERROR(${h.executionError})` : 'OK'}`
-            ).join('\n');
+                // FIX: Corrected syntax error where `ERROR(...)` was parsed as a function call.
+                // It is now correctly constructed as a string.
+                `Tool: ${h.toolCall?.name || 'N/A'}, Args: ${JSON.stringify(h.toolCall?.arguments)}, Result: ${h.executionError ? `ERROR: ${h.executionError}` : 'OK'}`
+            ).join('\\n');
 
             const availableToolsSummary = allTools.map(t => ({ name: t.name, description: t.description }));
             
@@ -282,7 +284,7 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
                         setApiCallCount(prev => ({ ...prev, [selectedModel.id]: (prev[selectedModel.id] || 0) + 1 }));
                         const searchResult = await contextualizeWithSearch({ text: `Find technical data for this request: "${currentUserTask.userRequest.text}"`, files: currentUserTask.userRequest.files }, apiConfig, selectedModel);
                         if (searchResult.summary) {
-                            const sourceList = searchResult.sources.map(s => `- ${s.title}: ${s.uri}`).join('\n');
+                            const sourceList = searchResult.sources.map(s => `- ${s.title}: ${s.uri}`).join('\\n');
                             finalUserRequestText = `User request: "${currentUserTask.userRequest.text}"\n\nWeb Search Results:\n${searchResult.summary}\nSources:\n${sourceList}`;
                             logEvent(`✨ Search complete. Context appended. Sources:\n${sourceList}`);
                         }
@@ -305,7 +307,7 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
                         `Action: ${r.toolCall?.name || 'Unknown'} - Result: ${r.executionError
                             ? `FAILED (${r.executionError})`
                             : `SUCCEEDED. Output: ${resultToString(r.executionResult)}`}`
-                    ).join('\n')}`
+                    ).join('\\n')}`
                     : "No actions have been performed yet.";
 
                 const promptForAgent = `${contextualDataString}CURRENT GOAL: "${finalUserRequestText}"\n\n${historyString}\n\nBased on the provided BACKGROUND information, your CURRENT GOAL, and the actions performed so far, what is the next single action to perform to advance the research protocol? If the goal is complete, you must call "Task Complete".`;
