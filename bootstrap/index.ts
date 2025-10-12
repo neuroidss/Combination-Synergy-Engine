@@ -12,6 +12,7 @@ import { DIAGNOSTIC_TOOLS } from './diagnostic_tools';
 import { ORGANOID_SIMULATION_CODE } from './organoid_simulation';
 import { UI_COMPONENTS_CODE } from './ui_components';
 import { DISCOVERY_TOOLS } from './discovery_tools';
+import { PERSONALIZATION_TOOLS } from './personalization_tools';
 
 const SYNERGY_FORGE_TOOLS: ToolCreatorPayload[] = [{
     name: 'Synergy Forge Main UI',
@@ -35,6 +36,14 @@ const SYNERGY_FORGE_TOOLS: ToolCreatorPayload[] = [{
     implementationCode: `
 ${ORGANOID_SIMULATION_CODE}
 ${UI_COMPONENTS_CODE}
+
+// --- PERSONALIZATION STATE ---
+const [userAgingVector, setUserAgingVector] = React.useState(null);
+const [userCoordinates, setUserCoordinates] = React.useState(null);
+const [personalizedVacancies, setPersonalizedVacancies] = React.useState([]);
+const [isProfileOpen, setIsProfileOpen] = React.useState(true); // Open by default
+const [profileForm, setProfileForm] = React.useState({ age: 45, sleep: 7, stress: 5, diet: 'average', exercise: 3 });
+
 
 const [organoids, setOrganoids] = React.useState(getInitialStates());
 const [selectedStatTab, setSelectedStatTab] = React.useState('stochastic');
@@ -105,6 +114,7 @@ const updateMapRealtime = React.useCallback(async (sources) => {
             for (let j = 0; j < gridSize; j++) {
                 if (grid[i][j] <= vacancyThreshold) {
                     newVacancies.push({
+                        id: \`v-\${i}-\${j}\`,
                         x: (i + 0.5) * cellSize, // Center of the cell
                         y: (j + 0.5) * cellSize,
                         radius: cellSize * 0.7, // Make radius slightly smaller than cell
@@ -139,9 +149,9 @@ const handleInterpretVacancy = async (vacancy) => {
 };
 
 const resetOrganoids = React.useCallback(() => {
-    setOrganoids(getInitialStates());
+    setOrganoids(getInitialStates(userAgingVector)); // Reset with user vector if available
     runtime.logEvent('[Organoid] Parallel simulation reset.');
-}, [runtime]);
+}, [runtime, userAgingVector]);
 
 React.useEffect(() => {
     // This effect runs whenever new sources are added, triggering a re-evaluation of all synergies.
@@ -191,6 +201,51 @@ React.useEffect(() => {
 
     reScoreAllSynergies();
 }, [allSources.length]);
+
+// --- PERSONALIZATION LOGIC ---
+const handleProfileFormChange = (e) => {
+    const { name, value, type } = e.target;
+    setProfileForm(prev => ({ ...prev, [name]: type === 'number' ? parseFloat(value) : value }));
+};
+
+const handleCreateProfile = async (e) => {
+    e.preventDefault();
+    const vectorResult = await runtime.tools.run('CreateUserAgingVector', { lifestyleData: profileForm });
+    if (vectorResult.userAgingVector) {
+        setUserAgingVector(vectorResult.userAgingVector);
+        // Immediately initialize the organoid simulator with the new user profile
+        setOrganoids(getInitialStates(vectorResult.userAgingVector));
+        runtime.logEvent('[Personalization] Organoid "virtual twin" configured for user profile.');
+        setIsProfileOpen(false); // Close the profile modal
+    }
+};
+
+React.useEffect(() => {
+    // This effect projects the user onto the map and finds personalized vacancies
+    const updateUserProjection = async () => {
+        if (userAgingVector && mapData.length > 0 && vacancies.length > 0) {
+            try {
+                const coordsResult = await runtime.tools.run('ProjectUserOntoMap', { userAgingVector, mapData });
+                if (coordsResult && coordsResult.userCoordinates) {
+                    setUserCoordinates(coordsResult.userCoordinates);
+                    const vacanciesResult = await runtime.tools.run('FindPersonalizedVacancies', {
+                        userCoordinates: coordsResult.userCoordinates,
+                        mapData,
+                        vacancies,
+                    });
+                    if (vacanciesResult && vacanciesResult.personalizedVacancies) {
+                       setPersonalizedVacancies(vacanciesResult.personalizedVacancies);
+                       runtime.logEvent(\`[Personalization] Found \${vacanciesResult.personalizedVacancies.length} high-potential research areas for you.\`);
+                    }
+                }
+            } catch (e) {
+                 runtime.logEvent(\`[Personalization] ❌ Error updating user projection: \${e.message}\`);
+            }
+        }
+    };
+    updateUserProjection();
+}, [userAgingVector, mapData, vacancies]);
+// --- END PERSONALIZATION ---
 
 
 React.useEffect(() => {
@@ -483,14 +538,56 @@ const epigeneticClockAge = chronologicalAge * (1 + (infoLossScore / 110));
 const functionalDecline = ((100 - currentOrganoidForStats.stemCellFunction) + (100 - currentOrganoidForStats.networkActivity) + currentOrganoidForStats.proteostasisLoss) / 3;
 const functionalClockAge = chronologicalAge * (1 + (functionalDecline / 110));
 
+const personalizedVacancyIds = new Set(personalizedVacancies.map(v => v.id));
+
 return (
     <div className="h-full w-full flex bg-slate-900 text-slate-200 font-sans overflow-hidden">
+        {isProfileOpen && (
+            <div className="absolute inset-0 bg-slate-900/80 backdrop-blur-md z-50 flex items-center justify-center p-4 transition-opacity duration-300">
+                <div className="w-full max-w-2xl bg-slate-800 border border-slate-700 rounded-2xl p-8 shadow-2xl text-center animate-fade-in">
+                    <h2 className="text-3xl font-bold text-cyan-300">Create Your Personal Longevity Profile</h2>
+                    <p className="text-slate-400 mt-2 mb-6">Answer a few questions to project yourself onto the research map and initialize your virtual twin.</p>
+                    <form onSubmit={handleCreateProfile} className="text-left space-y-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label htmlFor="age" className="block text-sm font-medium text-slate-300">Current Age</label>
+                                <input type="number" name="age" id="age" value={profileForm.age} onChange={handleProfileFormChange} className="mt-1 block w-full bg-slate-700 border border-slate-600 rounded-md shadow-sm py-2 px-3 text-white focus:outline-none focus:ring-cyan-500 focus:border-cyan-500"/>
+                            </div>
+                            <div>
+                                <label htmlFor="sleep" className="block text-sm font-medium text-slate-300">Avg. Sleep (hours/night)</label>
+                                <input type="number" name="sleep" id="sleep" value={profileForm.sleep} onChange={handleProfileFormChange} className="mt-1 block w-full bg-slate-700 border border-slate-600 rounded-md shadow-sm py-2 px-3 text-white focus:outline-none focus:ring-cyan-500 focus:border-cyan-500"/>
+                            </div>
+                            <div>
+                                <label htmlFor="stress" className="block text-sm font-medium text-slate-300">Stress Level (1-10)</label>
+                                <input type="range" name="stress" id="stress" min="1" max="10" value={profileForm.stress} onChange={handleProfileFormChange} className="mt-1 block w-full"/>
+                            </div>
+                            <div>
+                                <label htmlFor="exercise" className="block text-sm font-medium text-slate-300">Exercise (days/week)</label>
+                                <input type="number" name="exercise" id="exercise" value={profileForm.exercise} onChange={handleProfileFormChange} className="mt-1 block w-full bg-slate-700 border border-slate-600 rounded-md shadow-sm py-2 px-3 text-white focus:outline-none focus:ring-cyan-500 focus:border-cyan-500"/>
+                            </div>
+                        </div>
+                        <div>
+                            <label htmlFor="diet" className="block text-sm font-medium text-slate-300">Diet Quality</label>
+                            <select name="diet" id="diet" value={profileForm.diet} onChange={handleProfileFormChange} className="mt-1 block w-full bg-slate-700 border border-slate-600 rounded-md shadow-sm py-2 px-3 text-white focus:outline-none focus:ring-cyan-500 focus:border-cyan-500">
+                                <option value="poor">Poor (Processed Foods)</option>
+                                <option value="average">Average (Mixed)</option>
+                                <option value="good">Good (Whole Foods)</option>
+                            </select>
+                        </div>
+                        <button type="submit" className="w-full mt-6 bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-400 hover:to-blue-400 text-white font-bold py-3 px-4 rounded-lg text-lg transition-transform hover:scale-105">
+                            Find My Path to Longevity
+                        </button>
+                    </form>
+                </div>
+            </div>
+        )}
+
         {/* Left Column: Controls & Simulation */}
         <div className="w-[28rem] h-full flex flex-col p-4 gap-4 border-r border-slate-700/50 flex-shrink-0 overflow-y-auto">
             {/* Control Panel */}
             <div className="flex-shrink-0">
                 <h1 className="text-2xl font-bold text-cyan-400">SynergyForge</h1>
-                <p className="text-sm text-slate-400">Real-time Discovery & Simulation</p>
+                <p className="text-sm text-slate-400">Your Personal Longevity Navigator</p>
             </div>
             <div className="flex flex-col gap-3 bg-black/30 p-4 rounded-lg border border-slate-800">
                 <label htmlFor="task-prompt" className="font-semibold text-slate-300">Research Objective:</label>
@@ -553,7 +650,7 @@ return (
             
             {/* Organoid Section */}
             <div className="flex-shrink-0 flex justify-between items-center mt-4">
-                <h2 className="text-2xl font-bold text-emerald-300 drop-shadow-[0_0_8px_rgba(74,222,128,0.5)]">Organoid Odyssey</h2>
+                <h2 className="text-2xl font-bold text-emerald-300 drop-shadow-[0_0_8px_rgba(74,222,128,0.5)]">Your Virtual Twin</h2>
                  <button onClick={resetOrganoids} className="bg-red-800/50 text-red-300 border border-red-700 rounded-md px-3 py-1.5 text-xs hover:bg-red-700/50 font-semibold">Reset All</button>
             </div>
             <p className="text-sm text-slate-400 -mt-3">A Parallel Theory Sandbox</p>
@@ -595,7 +692,7 @@ return (
         {/* Center Column: Discovery Map */}
         <div className="flex-1 h-full flex flex-col p-4 gap-4 border-r border-slate-700/50">
             <h2 className="text-2xl font-bold text-purple-300 drop-shadow-[0_0_8px_rgba(192,132,252,0.5)]">Live Discovery Map</h2>
-            <p className="text-sm text-slate-400 -mt-3">A geometric projection of the real-time research landscape.</p>
+            <p className="text-sm text-slate-400 -mt-3">Your personal view of the research landscape.</p>
             <div className="flex-grow w-full bg-black/40 rounded-lg border border-slate-700 relative overflow-hidden" style={{ minHeight: '400px', backgroundImage: 'linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px)', backgroundSize: '20px 20px'}}>
                 {isMapLoading && (
                      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm z-20 flex items-center justify-center">
@@ -615,16 +712,27 @@ return (
                         </div>
                     </div>
                 ))}
-                {vacancies.map((v, i) => (
-                    <button 
-                        key={\`v-\${i}\`} 
-                        onClick={() => handleInterpretVacancy(v)}
-                        disabled={isInterpreting}
-                        className="absolute bg-purple-500/20 rounded-full border-2 border-dashed border-purple-400 animate-pulse hover:animate-none hover:bg-purple-500/40 cursor-pointer transition-colors -translate-x-1/2 -translate-y-1/2 z-10 disabled:cursor-wait disabled:bg-purple-900/50" 
-                        style={{ left: \`\${(v.x/500)*100}%\`, top: \`\${(v.y/500)*100}%\`, width: \`\${v.radius}px\`, height: \`\${v.radius}px\` }}
-                        title="Click to interpret this research vacancy"
-                    />
-                ))}
+                {vacancies.map((v, i) => {
+                    const isPersonalized = personalizedVacancyIds.has(v.id);
+                    return (
+                        <button 
+                            key={v.id} 
+                            onClick={() => handleInterpretVacancy(v)}
+                            disabled={isInterpreting}
+                            className={\`absolute rounded-full transition-all duration-300 -translate-x-1/2 -translate-y-1/2 z-10 \${isPersonalized 
+                                ? 'bg-yellow-500/30 border-2 border-dashed border-yellow-300 animate-pulse hover:animate-none hover:bg-yellow-500/40' 
+                                : 'bg-purple-500/20 border-2 border-dashed border-purple-400 hover:bg-purple-500/40'} 
+                                cursor-pointer disabled:cursor-wait disabled:bg-purple-900/50\`} 
+                            style={{ left: \`\${(v.x/500)*100}%\`, top: \`\${(v.y/500)*100}%\`, width: \`\${v.radius}px\`, height: \`\${v.radius}px\` }}
+                            title={isPersonalized ? "This is a high-potential research area for you! Click to interpret." : "Click to interpret this research vacancy"}
+                        />
+                    );
+                })}
+                {userCoordinates && (
+                     <div className="absolute w-5 h-5 bg-yellow-300 rounded-full flex items-center justify-center -translate-x-1/2 -translate-y-1/2 border-2 border-white shadow-lg animate-pulse" style={{ left: \`\${(userCoordinates.x/500)*100}%\`, top: \`\${(userCoordinates.y/500)*100}%\`, zIndex: 30}} title="This is you on the map, based on your profile.">
+                        <span className="text-[10px] font-bold text-black">You</span>
+                    </div>
+                )}
                 {isInterpreting && (
                     <div className="absolute inset-0 bg-black/50 backdrop-blur-sm z-20 flex items-center justify-center">
                         <LoadingIndicator message="Generating hypothesis..." />
@@ -692,4 +800,5 @@ export const BOOTSTRAP_TOOL_PAYLOADS: ToolCreatorPayload[] = [
     ...DATA_RECORDER_TOOLS,
     ...DIAGNOSTIC_TOOLS,
     ...DISCOVERY_TOOLS,
+    ...PERSONALIZATION_TOOLS,
 ];

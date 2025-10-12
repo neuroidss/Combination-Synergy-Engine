@@ -74,5 +74,46 @@ Your task is to invent a novel, groundbreaking hypothesis that connects these di
 
             return { hypotheticalAbstract, neighbors: nearestNeighbors.map(n => n.source) };
         `
+    },
+    {
+        name: 'FindPersonalizedVacancies',
+        description: 'Ranks all vacancies on the map based on their relevance to the user by considering proximity to the user\'s projected location and the synergy potential of neighboring research.',
+        category: 'Functional',
+        executionEnvironment: 'Client',
+        purpose: 'To identify and prioritize the most promising, personalized research opportunities for the user.',
+        parameters: [
+            { name: 'userCoordinates', type: 'object', description: 'The x and y coordinates of the user on the map.', required: true },
+            { name: 'mapData', type: 'array', description: 'The full map data, including all sources.', required: true },
+            { name: 'vacancies', type: 'array', description: 'The list of all available vacancy objects.', required: true },
+        ],
+        implementationCode: `
+            const { userCoordinates, mapData, vacancies } = args;
+
+            if (!userCoordinates || !vacancies || vacancies.length === 0) {
+                return { success: true, personalizedVacancies: [] };
+            }
+
+            const rankedVacancies = vacancies.map(vacancy => {
+                const distanceToUser = Math.sqrt(Math.pow(vacancy.x - userCoordinates.x, 2) + Math.pow(vacancy.y - userCoordinates.y, 2));
+
+                // Calculate synergy potential based on neighbors
+                const neighbors = mapData.sort((a, b) =>
+                    Math.sqrt(Math.pow(a.x - vacancy.x, 2) + Math.pow(a.y - vacancy.y, 2)) -
+                    Math.sqrt(Math.pow(b.x - vacancy.x, 2) + Math.pow(b.y - vacancy.y, 2))
+                ).slice(0, 3);
+                
+                const synergyPotential = neighbors.reduce((sum, n) => sum + (n.source.reliabilityScore || 0.5), 0);
+
+                // The score is higher for vacancies that are closer to the user and have high-potential neighbors
+                const relevanceScore = (synergyPotential / (distanceToUser + 1)) * 100;
+
+                return { ...vacancy, relevanceScore };
+            }).sort((a, b) => b.relevanceScore - a.relevanceScore);
+
+            runtime.logEvent(\`[Personalization] Found and ranked \${rankedVacancies.length} vacancies for the user.\`);
+            
+            // Return the top 5 most relevant vacancies
+            return { success: true, personalizedVacancies: rankedVacancies.slice(0, 5) };
+        `
     }
 ];

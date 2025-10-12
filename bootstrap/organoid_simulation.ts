@@ -11,33 +11,49 @@ const THEORY_KEYS = Object.keys(THEORIES);
 
 // --- ORGANOID STATE & SIMULATION ---
 // The state is now explicitly based on the 9 Hallmarks of Aging + new neural-specific metrics.
-const getInitialOrganoidState = () => ({
-    // Foundational
-    age: 0,
-    lifespan: 1500, // Theoretical max, dynamic based on health decline
-    overallHealth: 100,
-    // Primary Hallmarks (Causes of Damage)
-    genomicInstability: 0,
-    telomereAttrition: 0,
-    epigeneticAlterations: 0,
-    proteostasisLoss: 0,
-    // Antagonistic Hallmarks (Responses to Damage)
-    nutrientSensing: 0, // Deregulated nutrient sensing
-    mitoDysfunction: 0,
-    cellularSenescence: 0,
-    // Integrative Hallmarks (Culprits of the Phenotype)
-    stemCellExhaustion: 0,
-    intercellularCommunication: 0, // Altered
-    // Functional Outputs
-    inflammation: 0,
-    synapticDensity: 100,
-    networkActivity: 100,
-    stemCellFunction: 100, // A functional measure of the stem cell pool
-    // ** NEW Neural-Specific Metrics **
-    myelinIntegrity: 100, // Insulation for signal speed
-    neurotransmitterBalance: 100, // Chemical signaling efficiency
-    dendriticComplexity: 100, // Branching for learning/memory capacity
-});
+const getInitialOrganoidState = (userAgingVector = null) => {
+    const initialState = {
+        // Foundational
+        age: 350, // Start at a mid-life equivalent
+        lifespan: 1500, // Theoretical max, dynamic based on health decline
+        overallHealth: 100,
+        // Primary Hallmarks (Causes of Damage)
+        genomicInstability: 0,
+        telomereAttrition: 0,
+        epigeneticAlterations: 0,
+        proteostasisLoss: 0,
+        // Antagonistic Hallmarks (Responses to Damage)
+        nutrientSensing: 0, // Deregulated nutrient sensing
+        mitoDysfunction: 0,
+        cellularSenescence: 0,
+        // Integrative Hallmarks (Culprits of the Phenotype)
+        stemCellExhaustion: 0,
+        intercellularCommunication: 0, // Altered
+        // Functional Outputs
+        inflammation: 0,
+        synapticDensity: 100,
+        networkActivity: 100,
+        stemCellFunction: 100, // A functional measure of the stem cell pool
+        // ** NEW Neural-Specific Metrics **
+        myelinIntegrity: 100, // Insulation for signal speed
+        neurotransmitterBalance: 100, // Chemical signaling efficiency
+        dendriticComplexity: 100, // Branching for learning/memory capacity
+    };
+
+    if (userAgingVector) {
+        // Apply the user's vector to the initial state, scaling from 0-1 to 0-100 range
+        initialState.inflammation = (userAgingVector.inflammation || 0) * 40;
+        initialState.proteostasisLoss = (userAgingVector.proteostasisLoss || 0) * 35;
+        initialState.mitoDysfunction = (userAgingVector.mitoDysfunction || 0) * 50;
+        // You can add more mappings here for other hallmarks
+        
+        // Recalculate initial health based on these personalized starting points
+        const healthDecline = (initialState.inflammation + initialState.proteostasisLoss + initialState.mitoDysfunction) / 3;
+        initialState.overallHealth = Math.max(0, 100 - healthDecline);
+    }
+    
+    return initialState;
+};
 
 const getInitialInterventionEffects = () => ({
     genomicStability: 1.0,      // Multiplier, higher is better (reduces damage rate)
@@ -50,11 +66,11 @@ const getInitialInterventionEffects = () => ({
 });
 
 
-const getInitialStates = () => ({
-    stochastic: getInitialOrganoidState(),
-    hyperfunction: getInitialOrganoidState(),
-    information: getInitialOrganoidState(),
-    social: getInitialOrganoidState(),
+const getInitialStates = (userAgingVector = null) => ({
+    stochastic: getInitialOrganoidState(userAgingVector),
+    hyperfunction: getInitialOrganoidState(userAgingVector),
+    information: getInitialOrganoidState(userAgingVector),
+    social: getInitialOrganoidState(userAgingVector),
 });
 
 // --- CORE AGING LOGIC PER TICK ---

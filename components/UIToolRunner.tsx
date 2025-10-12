@@ -26,10 +26,9 @@ type ErrorBoundaryState = {
 
 // FIX: Correctly define the ErrorBoundary class with all its methods inside the class body.
 class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  constructor(props: ErrorBoundaryProps) {
-    super(props);
-    this.state = { hasError: false };
-  }
+  // FIX: Using a class property for state initialization instead of a constructor.
+  // This modern syntax is cleaner and avoids potential 'this' binding issues that might be causing the type errors.
+  state: ErrorBoundaryState = { hasError: false };
 
   static getDerivedStateFromError(error: any): ErrorBoundaryState {
     return { hasError: true };
