@@ -7,7 +7,6 @@ SynergyForge is a browser-first platform for an **AI agent capable of autonomous
 The core of the platform is a discovery engine that goes beyond simple search. It maps the entire landscape of scientific knowledge, identifies unexplored gaps between research areas, and generates novel, testable hypotheses to fill them.
 
 ![SynergyForge Discovery Map and Hypothesis Generation](https://github.com/neuroidss/Combination-Synergy-Engine/blob/main/Screenshot%20from%202025-10-12%2018-22-52.png?raw=true)
-*(Replace the link above with the URL to your screenshot)*
 
 ## The Discovery Engine: Finding What's Next
 
