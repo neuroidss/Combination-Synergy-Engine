@@ -1,8 +1,35 @@
-
-
 import type { ToolCreatorPayload } from '../types';
 
 export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
+    {
+        name: 'AdaptFetchStrategy',
+        description: 'A self-healing workflow that activates when web fetching fails. It discovers new CORS proxy builders using an AI, then updates the runtime with these new strategies to overcome blockades.',
+        category: 'Automation',
+        executionEnvironment: 'Client',
+        purpose: 'To provide a robust, autonomous recovery mechanism for network-related failures during research, enabling the agent to adapt and learn on the fly.',
+        parameters: [],
+        implementationCode: `
+            runtime.logEvent('[Adapt] Initiating fetch adaptation strategy...');
+            try {
+                // Step 1: Discover new proxy builder functions using AI
+                const discoveryResult = await runtime.tools.run('DiscoverProxyBuilders', {});
+                const newBuilderStrings = discoveryResult.newBuilderStrings;
+
+                if (!newBuilderStrings || newBuilderStrings.length === 0) {
+                    throw new Error("Discovery tool failed to return new proxy builder strings.");
+                }
+
+                // Step 2: Update the runtime's proxy list with the new discoveries
+                const updateResult = await runtime.search.updateProxyList(newBuilderStrings);
+                runtime.logEvent(\`[Adapt] ✅ Adaptation complete. \${updateResult.message}\`);
+                return { success: true, message: 'Fetch strategy adapted successfully.' };
+            } catch (e) {
+                const errorMessage = e instanceof Error ? e.message : String(e);
+                runtime.logEvent(\`[Adapt] ❌ Adaptation strategy failed: \${errorMessage}\`);
+                throw new Error(\`AdaptFetchStrategy failed: \${errorMessage}\`);
+            }
+        `
+    },
     {
         name: 'Execute Full Research and Proposal Workflow',
         description: 'Executes the complete, end-to-end workflow from scientific literature search to identifying and scoring all potential synergistic combinations for trial-readiness.',
@@ -19,134 +46,139 @@ export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
         // Step 1: Refine Search Queries
         runtime.logEvent('[Workflow] Step 1/4: Refining search queries...');
         const refineResult = await runtime.tools.run('Refine Search Queries', { researchObjective });
-        if (!refineResult || !refineResult.queries || refineResult.queries.length === 0) {
-            throw new Error("Workflow failed at Step 1: Could not generate refined search queries from the objective.");
-        }
         const refinedQueryString = refineResult.queries.join('; ');
         runtime.logEvent(\`[Workflow] Refined queries: \${refinedQueryString}\`);
 
-        // Step 2: Deep Federated Search (with Smart Retry)
+        // Step 2: Deep Federated Search
         runtime.logEvent('[Workflow] Step 2/4: Performing deep search on scientific literature...');
-        
         let proxyUrl = null;
-        try {
-            const proxyBootstrapResult = await runtime.tools.run('Test Web Proxy Service', {});
-            if (proxyBootstrapResult.proxyUrl) {
-                proxyUrl = proxyBootstrapResult.proxyUrl;
-            }
-        } catch (e) {
-            runtime.logEvent(\`[Workflow] WARN: Could not start or test local proxy service: \${e.message}. Will rely on public proxies.\`);
-        }
-
-        let searchResult = await runtime.tools.run('Federated Scientific Search', { query: refinedQueryString, maxResultsPerSource: 20, proxyUrl });
-        
-        if (!searchResult || !searchResult.searchResults || searchResult.searchResults.length === 0) {
-            runtime.logEvent('[Workflow] Initial search failed or returned no results. Engaging diagnostic retry tool...');
+        if (runtime.isServerConnected()) {
             try {
-                searchResult = await runtime.tools.run('Diagnose and Retry Search', {
-                    originalQuery: refinedQueryString,
-                    researchObjective: researchObjective,
-                    reasonForFailure: 'The initial refined queries returned zero results from all scientific databases.',
-                    proxyUrl: proxyUrl,
-                });
-                if (!searchResult || !searchResult.searchResults || searchResult.searchResults.length === 0) {
-                     throw new Error("Diagnostic retry also failed to find any sources.");
-                }
-                 runtime.logEvent('[Workflow] ✅ Diagnostic retry succeeded. Proceeding with new search results.');
-            } catch(e) {
-                 throw new Error(\`Workflow failed at Step 2: Federated search returned no results, even after a diagnostic retry. Error: \${e.message}\`);
+                const proxyBootstrapResult = await runtime.tools.run('Test Web Proxy Service', {});
+                proxyUrl = proxyBootstrapResult.proxyUrl;
+            } catch (e) {
+                runtime.logEvent(\`[Workflow] WARN: Could not start or test local proxy service: \${e.message}. Will rely on public proxies.\`);
             }
         }
         
-        const initialSearchResults = searchResult.searchResults;
-        runtime.logEvent(\`[Workflow] Found \${initialSearchResults.length} potential sources. Beginning streaming validation and analysis...\`);
+        const searchResult = await runtime.tools.run('Federated Scientific Search', { query: refinedQueryString, maxResultsPerSource: 20, proxyUrl });
+        let initialSearchResults = searchResult.searchResults || [];
         
-        // Step 3: STREAMING VALIDATION, CLASSIFICATION, AND ANALYSIS LOOP
-        runtime.logEvent(\`[Workflow] Step 3/4: Processing \${initialSearchResults.length} sources individually...\`);
-        let allValidatedSources = [];
+        if (initialSearchResults.length === 0) {
+            runtime.logEvent('[Workflow] Initial search failed or returned no results. Engaging diagnostic retry tool...');
+            const retrySearchResult = await runtime.tools.run('Diagnose and Retry Search', {
+                originalQuery: refinedQueryString, researchObjective, reasonForFailure: 'The initial refined queries returned zero results.', proxyUrl,
+            });
+            initialSearchResults = retrySearchResult.searchResults || [];
+            if (initialSearchResults.length === 0) {
+                 throw new Error("Workflow failed at Step 2: Federated search returned no results, even after a diagnostic retry.");
+            }
+            runtime.logEvent('[Workflow] ✅ Diagnostic retry succeeded.');
+        }
+        runtime.logEvent(\`[Workflow] Found \${initialSearchResults.length} potential sources. Beginning validation...\`);
+
+        // Step 3: ITERATIVE VALIDATION with SELF-HEALING
+        runtime.logEvent(\`[Workflow] Step 3/4: Validating \${initialSearchResults.length} sources individually...\`);
+        
+        let sourcesToProcess = [...initialSearchResults];
+        let validatedSources = [];
+        let failedSources = [];
+        let adaptationAttempted = false;
+
+        while (sourcesToProcess.length > 0) {
+            let currentIterationFailures = [];
+            
+            for (const [index, source] of sourcesToProcess.entries()) {
+                runtime.logEvent(\`[Workflow] -> Processing source \${index + 1}/\${sourcesToProcess.length}: "\${source.title.substring(0, 40)}..."\`);
+                try {
+                    const validationResult = await runtime.tools.run('Find and Validate Single Source', {
+                        searchResult: source, researchObjective, proxyUrl
+                    });
+                    validatedSources.push(validationResult.validatedSource);
+                } catch (e) {
+                    runtime.logEvent(\`[Workflow] -> ❌ Validation failed for source: \${e.message}\`);
+                    currentIterationFailures.push(source);
+                }
+                await new Promise(resolve => setTimeout(resolve, 350)); // Rate limit
+            }
+
+            const failureRate = sourcesToProcess.length > 0 ? currentIterationFailures.length / sourcesToProcess.length : 0;
+            
+            if (failureRate > 0.5 && !adaptationAttempted) {
+                runtime.logEvent(\`[Workflow] High failure rate (\${(failureRate * 100).toFixed(0)}%) detected. Attempting self-healing...\`);
+                adaptationAttempted = true;
+                await runtime.tools.run('AdaptFetchStrategy', {});
+                runtime.logEvent('[Workflow] Retrying failed sources with new strategy...');
+                sourcesToProcess = currentIterationFailures; // Set up the next loop with only the failed sources
+            } else {
+                failedSources.push(...currentIterationFailures);
+                sourcesToProcess = []; // Exit the loop
+            }
+        }
+        
+        if (failedSources.length > 0) {
+            runtime.logEvent(\`[Workflow] Validation complete. \${failedSources.length} sources could not be processed.\`);
+        }
+        runtime.logEvent(\`[Workflow] Processing \${validatedSources.length} successfully validated sources...\`);
+        
         let allSynergies = [];
         let metaAnalyses = [];
 
         const gameParamsTool = runtime.tools.list().find(t => t.name === 'RecordSynergyGameParameters');
         if (!gameParamsTool) throw new Error("Core tool 'RecordSynergyGameParameters' not found.");
 
-        for (const [index, source] of initialSearchResults.entries()) {
-            runtime.logEvent(\`[Workflow] Source \${index + 1}/\${initialSearchResults.length}: "\${source.title.substring(0, 50)}..."\`);
+        for (const [index, validatedSource] of validatedSources.entries()) {
+            runtime.logEvent(\`[Workflow] Analyzing source \${index + 1}/\${validatedSources.length}: "\${validatedSource.title.substring(0, 50)}..."\`);
             
-            // a. Enrich and Validate ONE source
-            const validationResult = await runtime.tools.run('Enrich and Validate Sources', { searchResults: [source], proxyUrl, researchObjective });
-            const validatedSource = validationResult?.validatedSources?.[0];
-            
-            if (!validatedSource) {
-                runtime.logEvent('[Workflow] ...source failed validation or enrichment. Skipping.');
-                continue; // Skip to the next source
-            }
-            
-            // NEW: Add reliability check
-            const RELIABILITY_THRESHOLD = 0.6; // 60%
-            if (validatedSource.reliabilityScore < RELIABILITY_THRESHOLD) {
-                runtime.logEvent(\`[Workflow] ...source "\${validatedSource.title.substring(0,50)}..." skipped due to low reliability score (\${(validatedSource.reliabilityScore * 100).toFixed(0)}% < \${RELIABILITY_THRESHOLD * 100}%).\`);
+            if (validatedSource.reliabilityScore < 0.6) {
+                runtime.logEvent(\`[Workflow] ...source skipped due to low reliability score (\${(validatedSource.reliabilityScore * 100).toFixed(0)}%).\`);
                 continue;
             }
-            allValidatedSources.push(validatedSource);
 
-            // b. Classify ONE source
             const classificationResult = await runtime.tools.run('Identify Meta-Analyses', { validatedSources: [validatedSource] });
-            const isMeta = classificationResult.metaAnalyses && classificationResult.metaAnalyses.length > 0;
-            if (isMeta) {
+            if (classificationResult.metaAnalyses && classificationResult.metaAnalyses.length > 0) {
                 metaAnalyses.push(validatedSource);
-                runtime.logEvent('[Workflow] ...classified as Meta-Analysis.');
-            } else {
-                runtime.logEvent('[Workflow] ...classified as Primary Study.');
             }
             
-            // c. Analyze the source for synergies (both meta-analyses and primary studies)
             const synergyAnalysisResult = await runtime.tools.run('Analyze Single Source for Synergies', {
-                sourceToAnalyze: validatedSource,
-                researchObjective,
-                metaAnalyses
+                sourceToAnalyze: validatedSource, researchObjective, metaAnalyses
             });
             const newSynergies = synergyAnalysisResult.synergies || [];
 
             if (newSynergies.length > 0) {
                  allSynergies.push(...newSynergies);
-
                  for (const synergy of newSynergies) {
-                    // d. Generate Game Parameters for synergy
                     const paramsPrompt = \`Based on the synergy: \${JSON.stringify(synergy)}, call the 'RecordSynergyGameParameters' tool with appropriate numerical values. The 'synergyCombination' parameter must be an array of strings containing only the intervention names.\`;
                     const systemInstruction = "You are an expert system that translates scientific data into simulation parameters by calling the provided tool. Respond only with a tool call.";
                     try {
                         const aiResponse = await runtime.ai.processRequest(paramsPrompt, systemInstruction, [gameParamsTool]);
                         const toolCall = aiResponse?.toolCalls?.[0];
                         if (toolCall && toolCall.name === 'RecordSynergyGameParameters') {
-                            // Safeguard: Manually inject the combination names to ensure it's correct, as the LLM might get it wrong.
                             toolCall.arguments.synergyCombination = synergy.combination.map(c => c.name);
                             await runtime.tools.run(toolCall.name, toolCall.arguments);
                         }
-                    } catch(e) {
-                        runtime.logEvent(\`[Workflow] WARN: Failed to generate parameters for \${synergy.combination.map(c => c.name).join(' + ')}. Error: \${e.message}\`);
+                    } catch(e) { 
+                        runtime.logEvent(\`[Workflow] WARN: Failed to generate game parameters for \${synergy.combination.map(c => c.name).join(' + ')}. Error: \${e.message}\`);
                     }
                  }
             }
-             await new Promise(resolve => setTimeout(resolve, 500)); // Rate limit between sources
+             await new Promise(resolve => setTimeout(resolve, 500));
         }
 
-        // Step 3.5: De Novo Hypothesis Generation
         runtime.logEvent('[Workflow] Step 3.5: Building semantic space for de novo hypothesis generation...');
-        if (allValidatedSources.length > 0) {
+        if (validatedSources.length > 0) {
             try {
-                const chunkingResult = await runtime.tools.run('Chunk and Embed Scientific Articles', { validatedSources: allValidatedSources });
+                const chunkingResult = await runtime.tools.run('Chunk and Embed Scientific Articles', { validatedSources });
                 const vectorDB = chunkingResult.vectorDB;
                 
                 if (vectorDB && vectorDB.length > 0) {
                     runtime.logEvent(\`[Workflow] ...semantic space created with \${vectorDB.length} chunks. Generating conceptual queries...\`);
-                    const conceptualQueriesResult = await runtime.tools.run('Generate Conceptual Queries from Objective', { researchObjective, validatedSources: allValidatedSources });
+                    const conceptualQueriesResult = await runtime.tools.run('Generate Conceptual Queries from Objective', { researchObjective, validatedSources: validatedSources });
                     const conceptualQueries = conceptualQueriesResult.conceptual_queries;
 
                     if (conceptualQueries && conceptualQueries.length > 0) {
                         for (const query of conceptualQueries) {
                             runtime.logEvent(\`[Workflow] ...exploring concept: "\${query.substring(0, 80)}..."\`);
-                            // This tool finds ONE hypothesis and records it (unscored)
                             const hypothesisResult = await runtime.tools.run('Hypothesis Generator via Conceptual Search', { 
                                 conceptualQuery: query, 
                                 vectorDB: vectorDB 
@@ -154,18 +186,15 @@ export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
                             
                             const newHypothesis = hypothesisResult.synergy;
                             if (newHypothesis) {
-                                // Now, score this new hypothesis
                                 runtime.logEvent(\`[Workflow] ...scoring de novo hypothesis: \${newHypothesis.combination.map(c=>c.name).join(' + ')}\`);
                                 const scoringResult = await runtime.tools.run('Score Single Synergy', {
                                     synergyToScore: newHypothesis,
-                                    backgroundSources: allValidatedSources
+                                    backgroundSources: validatedSources
                                 });
 
                                 if (scoringResult.updatedSynergy) {
-                                    // Record the scored synergy. This will update the previous entry in the UI.
                                      await runtime.tools.run('RecordSynergy', scoringResult.updatedSynergy);
 
-                                     // Generate game parameters for the newly scored hypothesis
                                      runtime.logEvent(\`[Workflow] ...generating game parameters for de novo hypothesis.\`);
                                      const paramsPrompt = \`Based on the synergy: \${JSON.stringify(scoringResult.updatedSynergy)}, call the 'RecordSynergyGameParameters' tool with appropriate numerical values. The 'synergyCombination' parameter must be an array of strings containing only the intervention names.\`;
                                      const systemInstruction = "You are an expert system that translates scientific data into simulation parameters by calling the provided tool. Respond only with a tool call.";
@@ -181,7 +210,7 @@ export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
                                      }
                                 }
                             }
-                            await new Promise(resolve => setTimeout(resolve, 500)); // Rate limit
+                            await new Promise(resolve => setTimeout(resolve, 500));
                         }
                     }
                 }
@@ -190,9 +219,8 @@ export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
             }
         }
 
-        // Step 4: Final Summary
         runtime.logEvent('[Workflow] Step 4/4: Finalizing...');
-        const finalSummary = \`Workflow completed for objective: "\${researchObjective}". Fully processed \${initialSearchResults.length} potential articles, validating \${allValidatedSources.length}. Identified \${allSynergies.length} potential synergies and scored them for trial readiness. Results are available in the 'Synergies' and 'Proposals' tabs.\`;
+        const finalSummary = \`Workflow completed. Processed \${initialSearchResults.length} potential articles, validating \${validatedSources.length}. Identified \${allSynergies.length} potential synergies.\`;
         runtime.logEvent(\`[Workflow] ✅ \${finalSummary}\`);
         return { success: true, message: "Workflow finished successfully.", summary: finalSummary };
     `
@@ -254,10 +282,17 @@ app.post('/browse', async (req, res) => {
     try {
         const userAgent = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
         const response = await fetch(url, {
-            headers: { 
-                'User-Agent': userAgent,
-                'Accept': 'text/html,application/xhtml+xml,application/xml,application/json;q=0.9,image/webp,image/apng,*/*;q=0.8',
+            headers: {
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.9',
+                'User-Agent': userAgent,
+                'Sec-Ch-Ua': '"Not/A)Brand";v="99", "Google Chrome";v="127", "Chromium";v="127"',
+                'Sec-Ch-Ua-Mobile': '?0',
+                'Sec-Ch-Ua-Platform': '"Windows"',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'cross-site',
+                'Upgrade-Insecure-Requests': '1',
             }
         });
         

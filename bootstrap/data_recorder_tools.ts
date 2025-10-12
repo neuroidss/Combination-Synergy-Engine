@@ -29,8 +29,8 @@ export const DATA_RECORDER_TOOLS: ToolCreatorPayload[] = [
             { name: 'uri', type: 'string', description: 'The unique URL or identifier for the source.', required: true },
             { name: 'title', type: 'string', description: 'The title of the article.', required: true },
             { name: 'summary', type: 'string', description: 'A concise summary of the article\'s key findings relevant to the research objective.', required: true },
-            { name: 'reliability', type: 'number', description: 'A score from 0.0 to 1.0 indicating the source\'s scientific reliability.', required: true },
-            { name: 'reliabilityJustification', type: 'string', description: 'A brief justification for the assigned reliability score.', required: true },
+            { name: 'reliabilityScore', type: 'number', description: 'A score from 0.0 to 1.0 indicating the source\'s scientific reliability.', required: true },
+            { name: 'justification', type: 'string', description: 'A brief justification for the assigned reliability score.', required: true },
         ],
         implementationCode: `
             const { ...validatedSourceData } = args;

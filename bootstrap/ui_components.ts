@@ -1,4 +1,5 @@
 
+
 export const UI_COMPONENTS_CODE = `
 const InterventionTypeIcon = ({ type }) => {
     const typeMap = {
@@ -99,7 +100,7 @@ const AgingClock = ({ name, biologicalAge, chronologicalAge }) => {
 const SourceCard = ({source}) => (
     <div className="bg-slate-800/60 p-3 rounded-lg border border-slate-700 transition-colors hover:border-cyan-500/80 hover:bg-slate-800">
         <button onClick={() => window.open(source.url || source.uri, '_blank', 'noopener,noreferrer')} className="text-cyan-400 hover:underline font-semibold block truncate text-left w-full">{source.title}</button>
-        <p className="text-xs text-slate-500 mt-1">Reliability: {(source.reliabilityScore * 100).toFixed(0)}% - {source.justification}</p>
+        <p className="text-xs text-slate-500 mt-1">Reliability: {((source.reliabilityScore || 0) * 100).toFixed(0)}% - {source.justification}</p>
         <p className="text-sm text-slate-300 mt-2">{source.summary}</p>
     </div>
 );

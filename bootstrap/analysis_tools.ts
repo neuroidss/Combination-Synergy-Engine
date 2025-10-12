@@ -12,23 +12,34 @@ export const ANALYSIS_TOOLS: ToolCreatorPayload[] = [
             { name: 'sources', type: 'array', description: 'An array of validated source objects, which must include a `title` and `summary`.', required: true },
         ],
         implementationCode: `
-    const { sources } = args;
-    if (!sources || sources.length === 0) {
-        return { success: true, embeddedSources: [] };
-    }
+const { sources } = args;
+if (!sources || sources.length === 0) {
+    return { success: true, embeddedSources: [] };
+}
 
-    runtime.logEvent(\`[Embedder] Generating embeddings for \${sources.length} sources...\`);
+runtime.logEvent(\`[Embedder] Generating embeddings for \${sources.length} sources in batches...\`);
+
+const batchSize = 10; // Process in smaller chunks to avoid GPU memory limits
+const embeddedSources = [];
+
+for (let i = 0; i < sources.length; i += batchSize) {
+    const batchSources = sources.slice(i, i + batchSize);
+    const textsToEmbed = batchSources.map(source => \`\${source.title}: \${source.summary}\`);
     
-    const textsToEmbed = sources.map(source => \`\${source.title}: \${source.summary}\`);
-    const embeddings = await runtime.ai.generateEmbeddings(textsToEmbed);
-
-    const embeddedSources = sources.map((source, index) => ({
+    runtime.logEvent(\`[Embedder] ...processing batch \${Math.floor(i/batchSize) + 1} (\${batchSources.length} sources)\`);
+    
+    const batchEmbeddings = await runtime.ai.generateEmbeddings(textsToEmbed);
+    
+    const newEmbeddedSources = batchSources.map((source, index) => ({
         ...source,
-        embedding: embeddings[index],
+        embedding: batchEmbeddings[index],
     }));
+    
+    embeddedSources.push(...newEmbeddedSources);
+}
 
-    runtime.logEvent(\`[Embedder] ✅ Successfully embedded \${embeddedSources.length} sources.\`);
-    return { success: true, embeddedSources };
+runtime.logEvent(\`[Embedder] ✅ Successfully embedded \${embeddedSources.length} sources.\`);
+return { success: true, embeddedSources };
 `
     },
     {

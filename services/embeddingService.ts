@@ -1,22 +1,10 @@
 import { pipeline, type FeatureExtractionPipeline } from '@huggingface/transformers';
 
-// List of models to try, from smallest to largest quantized version.
-// This allows for a graceful fallback if a smaller model fails to load on the user's device.
-const EMBEDDING_MODELS: {name: string, size: string}[] = [
-//    { name: 'Xenova/paraphrase-MiniLM-L3-v2', size: '17.5MB' }, // Smallest, fastest option
-    { name: 'Xenova/all-MiniLM-L6-v2', size: '23MB' },       // The original model, a reliable fallback
-];
-
 class EmbeddingSingleton {
     static instance: FeatureExtractionPipeline | null = null;
     static async getInstance(onProgress: (msg: string) => void): Promise<FeatureExtractionPipeline> {
         if (this.instance !== null) {
             return this.instance;
-        }
-
-        if (EMBEDDING_MODELS.length === 0) {
-            onProgress(`[ERROR] ❌ No embedding models are configured. Tool relevance filtering will be disabled.`);
-            throw new Error("No embedding models configured. This feature is disabled.");
         }
 
         (window as any).env = { ...(window as any).env, allowLocalModels: false, useFbgemm: false };
@@ -29,32 +17,49 @@ class EmbeddingSingleton {
                 reportedDownloads.add(file);
             }
         };
-        
-        for (const modelInfo of EMBEDDING_MODELS) {
+
+        const webgpuFailedPreviously = sessionStorage.getItem('webgpu_failed') === 'true';
+
+        // --- Attempt #1: WebGPU (Fast) ---
+        if (!webgpuFailedPreviously) {
             try {
-                onProgress(`🚀 Attempting to load embedding model: ${modelInfo.name} (${modelInfo.size})...`);
-                reportedDownloads.clear(); // Reset reported files for each new attempt
-                
-                const extractor = await pipeline('feature-extraction', modelInfo.name, {
+                onProgress(`🚀 Attempting to load embedding model via WebGPU...`);
+                reportedDownloads.clear();
+                const extractor = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
                     device: 'webgpu',
                     progress_callback: progressCallback,
-                    dtype: 'auto' // Use automatic quantization for better compatibility
+                    dtype: 'auto'
                 });
-
-                onProgress(`✅ Successfully loaded embedding model: ${modelInfo.name}`);
+                onProgress(`✅ Successfully loaded model on WebGPU.`);
                 this.instance = extractor;
                 return this.instance;
-
             } catch (e) {
                 const errorMessage = e instanceof Error ? e.message : String(e);
-                onProgress(`[WARN] ⚠️ Failed to load ${modelInfo.name}. Reason: ${errorMessage}. Trying next model...`);
-                console.warn(`Failed to load embedding model ${modelInfo.name}`, e);
+                onProgress(`[WARN] ⚠️ WebGPU initialization failed: ${errorMessage}. Falling back to CPU (WASM)...`);
+                console.warn("WebGPU failed, falling back to WASM:", e);
+                // Set flag so we don't try again this session
+                sessionStorage.setItem('webgpu_failed', 'true');
             }
+        } else {
+             onProgress(`[INFO] Skipping WebGPU because it failed previously in this session.`);
         }
 
-        // This part is reached only if all models in the list fail to load.
-        onProgress(`[ERROR] ❌ Could not load any embedding models. Tool relevance filtering will be disabled.`);
-        throw new Error("All embedding models failed to load. Please check your network connection and browser compatibility (e.g., Chrome/Edge).");
+        // --- Attempt #2: WASM/CPU (Slow but Reliable) ---
+        try {
+            onProgress(`🚀 Loading embedding model via CPU (WASM)... This may be slower.`);
+            reportedDownloads.clear();
+            const extractor = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
+                device: 'wasm',
+                progress_callback: progressCallback,
+            });
+            onProgress(`✅ Successfully loaded model on CPU.`);
+            this.instance = extractor;
+            return this.instance;
+        } catch (e) {
+            const errorMessage = e instanceof Error ? e.message : String(e);
+            onProgress(`[ERROR] ❌ Critical Error: Could not load embedding model on either WebGPU or CPU. ${errorMessage}`);
+            throw e;
+        }
     }
 }
 

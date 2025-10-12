@@ -280,7 +280,12 @@ React.useEffect(() => {
     if (!liveSwarmHistory || liveSwarmHistory.length === 0) return;
 
     const newSources = liveSwarmHistory
-        .filter(h => h.tool?.name === 'RecordValidatedSource' && h.executionResult?.validatedSource)
+        .filter(h => 
+            h.tool?.name === 'RecordValidatedSource' && 
+            h.executionResult?.validatedSource &&
+            // Filter out sources with 0 reliability, as they are typically 404s or invalid.
+            h.executionResult.validatedSource.reliabilityScore > 0
+        )
         .map(h => ({
             ...h.executionResult.validatedSource,
             id: h.executionResult.validatedSource.uri,
@@ -385,8 +390,16 @@ const anyOrganoidAlive = React.useMemo(() => Object.values(organoids).some(o => 
 
 React.useEffect(() => {
     if (isSwarmRunning && eventLog && eventLog.length > 0) {
-        const lastLog = eventLog[eventLog.length - 1] || '';
-        const progressMatch = lastLog.match(/\\\[Workflow\\] Step (\\d+)\\/(\\d+): (.*)/);
+        // Search backwards for the last progress update to ensure we don't miss it.
+        let progressMatch = null;
+        for (let i = eventLog.length - 1; i >= 0; i--) {
+            const log = eventLog[i];
+            const match = log.match(/\\\[Workflow\\] Step (\\d+)\\/(\\d+): (.*)/);
+            if (match) {
+                progressMatch = match;
+                break; // Found the most recent progress update
+            }
+        }
 
         if (progressMatch) {
             const step = parseInt(progressMatch[1], 10);
@@ -402,8 +415,6 @@ React.useEffect(() => {
             }
             
             setProgressInfo({ step, total, message, eta });
-        } else if (lastLog.includes('[Workflow] Starting full research')) {
-             setProgressInfo({ step: 0, total: 4, message: 'Starting...', eta: 0 });
         }
     } else if (!isSwarmRunning) {
          taskStartTime.current = null;

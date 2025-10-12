@@ -18,16 +18,18 @@ interface UIToolRunnerComponentProps {
 type ErrorBoundaryProps = {
   fallback: React.ReactNode;
   toolName: string;
-  children: React.ReactNode;
+  // FIX: Made children optional to fix a perplexing type error at the usage site
+  // where TypeScript failed to recognize the passed children.
+  children?: React.ReactNode;
 };
 type ErrorBoundaryState = {
   hasError: boolean;
 };
 
-// FIX: Correctly define the ErrorBoundary class with all its methods inside the class body.
+// FIX: Reverted to class field for state initialization. The constructor-based approach
+// was still resulting in type errors where 'this.props' and 'this.state' were not recognized.
+// Using a class field is a more modern and often more reliable syntax with some TS/Babel configurations.
 class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  // FIX: Using a class property for state initialization instead of a constructor.
-  // This modern syntax is cleaner and avoids potential 'this' binding issues that might be causing the type errors.
   state: ErrorBoundaryState = { hasError: false };
 
   static getDerivedStateFromError(error: any): ErrorBoundaryState {

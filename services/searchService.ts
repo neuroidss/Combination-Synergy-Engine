@@ -2,14 +2,112 @@
 // Escaping is only for 'implementationCode' strings in tool definitions.
 import type { SearchDataSource, SearchResult } from '../types';
 
-const PROXY_BUILDERS = [
+/**
+ * Intelligently analyzes an identifier (PMID, PMCID, DOI) or a full URL and returns a valid, canonical URL.
+ * Returns null if the identifier is not recognized.
+ * @param idOrUrl - The identifier string or a full URL.
+ * @returns The canonical URL as a string, or null.
+ */
+const buildCanonicalUrl = (idOrUrl: string): string | null => {
+    if (!idOrUrl || typeof idOrUrl !== 'string') {
+        return null;
+    }
+
+    const trimmed = idOrUrl.trim();
+
+    // 1. It's already a valid URL
+    if (trimmed.startsWith('http')) {
+        try {
+            const url = new URL(trimmed);
+            // Clean up common tracking parameters from NCBI links
+            if (url.hostname.includes('ncbi.nlm.nih.gov')) {
+                url.searchParams.delete('log$');
+                url.searchParams.delete('utm_source');
+            }
+            return url.href;
+        } catch (e) {
+            return null; // Invalid URL format
+        }
+    }
+
+    // 2. It's a DOI
+    const doiMatch = trimmed.match(/^(10\.\d{4,9}\/[-._;()/:A-Z0-9]+)$/i);
+    if (doiMatch) {
+        return `https://doi.org/${doiMatch[1]}`;
+    }
+    
+    // 3. It's an EXPLICIT PMCID (must start with "PMC")
+    const explicitPmcidMatch = trimmed.match(/^(PMC\d{1,})$/i);
+    if (explicitPmcidMatch) {
+        return `https://www.ncbi.nlm.nih.gov/pmc/articles/${explicitPmcidMatch[1]}/`;
+    }
+
+    // 4. It's a PMID (numeric only)
+    const pmidMatch = trimmed.match(/^(\d{1,10})$/);
+    if (pmidMatch) {
+        return `https://pubmed.ncbi.nlm.nih.gov/${pmidMatch[1]}/`;
+    }
+
+
+    // Unrecognized format
+    return null;
+};
+
+
+const INITIAL_PROXY_BUILDERS = [
     (url: string) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
     (url: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
     (url:string) => `https://thingproxy.freeboard.io/fetch/${url}`,
 ];
 
+// --- DYNAMIC PROXY MANAGEMENT ---
+// This list is now stateful and can be modified at runtime by the agent.
+let proxyList: {
+    builder: (url: string) => string;
+    builderString: string;
+    score: number;
+    lastAttempt: number;
+}[] = INITIAL_PROXY_BUILDERS.map(fn => ({
+    builder: fn,
+    builderString: fn.toString(),
+    score: 10,
+    lastAttempt: 0,
+}));
+
+// Function exposed to the runtime to allow the agent to learn new strategies.
+export const updateProxyList = (newBuilderStrings: string[]) => {
+    const existingBuilderStrings = new Set(proxyList.map(p => p.builderString));
+    let addedCount = 0;
+    for (const str of newBuilderStrings) {
+        if (!existingBuilderStrings.has(str)) {
+            try {
+                // Safely create the function from the AI-generated string.
+                const newBuilder = new Function('return ' + str)();
+                if (typeof newBuilder === 'function') {
+                    proxyList.push({
+                        builder: newBuilder,
+                        builderString: str,
+                        score: 15, // Give new strategies a higher initial score
+                        lastAttempt: 0,
+                    });
+                    addedCount++;
+                }
+            } catch (e) {
+                console.error(`[Proxy Manager] Failed to create proxy builder function from string: ${str}`, e);
+            }
+        }
+    }
+    return { success: true, message: `Added ${addedCount} new proxy strategies.` };
+};
+
+export const getProxyList = async () => {
+    // Return a copy to prevent mutation
+    return [...proxyList];
+};
+// --- END DYNAMIC PROXY MANAGEMENT ---
+
 const PRIMARY_SOURCE_DOMAINS = [
-    'pubmed.ncbi.nlm.nih.gov', 'ncbi.nlm.nih.gov/pmc',
+    'pubmed.ncbi.nlm.nih.gov', 'ncbi.nlm.nih.gov/pmc', 'pmc.ncbi.nlm.nih.gov',
     'biorxiv.org', 'medrxiv.org', 'arxiv.org',
     'patents.google.com', 'uspto.gov',
     'nature.com', 'science.org', 'cell.com',
@@ -31,8 +129,6 @@ export const isPrimarySourceDomain = (url: string): boolean => {
 
 const fetchWithCorsFallback = async (url: string, logEvent: (message: string) => void, proxyUrl?: string): Promise<Response> => {
     // Strategy 1: Prioritize the local Web Proxy MCP if its URL is provided.
-    // If the proxy is specified, we treat it as the ONLY valid method.
-    // This prevents falling back to unreliable public proxies when a local, reliable one is expected.
     if (proxyUrl) {
         logEvent(`[Fetch] Attempting fetch via mandated Web Proxy MCP at ${proxyUrl}...`);
         try {
@@ -42,36 +138,23 @@ const fetchWithCorsFallback = async (url: string, logEvent: (message: string) =>
                 body: JSON.stringify({ url }),
             });
 
-            if (!proxyResponse.ok) {
-                // If the proxy server responds with an error, we throw.
-                const errorText = await proxyResponse.text();
-                // Try to parse the error for a more specific message from the proxy's JSON response
-                try {
-                    const errorJson = JSON.parse(errorText);
-                    if (errorJson.error) {
-                        throw new Error(`Local proxy service failed with status ${proxyResponse.status}: ${errorJson.error}`);
-                    }
-                } catch(e) {
-                    // Fallback to raw text if not JSON
-                }
-                const truncatedErrorText = errorText.length > 500 ? errorText.substring(0, 500) + '...' : errorText;
-                throw new Error(`Local proxy service failed with status ${proxyResponse.status}: ${truncatedErrorText}`);
+            if (proxyResponse.ok) {
+                logEvent(`[Fetch] Success with local Web Proxy MCP.`);
+                return proxyResponse;
             }
-
-            // The proxy now returns the raw response from the target, just like a public proxy.
-            // No special handling is needed; just return the successful response.
-            logEvent(`[Fetch] Success with local Web Proxy MCP.`);
-            return proxyResponse;
-
+            const errorText = await proxyResponse.text();
+            logEvent(`[Fetch] WARN: Local proxy service failed with status ${proxyResponse.status}: ${errorText.substring(0, 200)}...`);
+            throw new Error(`LOCAL_PROXY_FAILED: Status ${proxyResponse.status}`);
         } catch (error) {
-             // If we can't even connect to the proxy, we throw.
-             logEvent(`[Fetch] FATAL: Could not connect to or get a valid response from the Web Proxy MCP. Aborting fetch. Error: ${error instanceof Error ? error.message : String(error)}`);
-             throw new Error(`Failed to use the local web proxy at ${proxyUrl}. Ensure the server is running and the 'Bootstrap Web Proxy Service' tool ran successfully. Error: ${error instanceof Error ? error.message : String(error)}`);
+             const errorMessage = error instanceof Error ? error.message : String(error);
+             logEvent(`[Fetch] WARN: Could not connect to the local proxy service. Error: ${errorMessage}. Falling back.`);
+             if (!errorMessage.startsWith('LOCAL_PROXY_FAILED')) {
+                throw new Error(`LOCAL_PROXY_UNREACHABLE: ${errorMessage}`);
+             }
         }
     }
 
-    // --- Fallback behavior ONLY executes if no proxyUrl was provided ---
-    logEvent('[Fetch] No local proxy specified. Using fallback methods (direct fetch, public proxies).');
+    // --- Fallback behavior executes if no proxyUrl was provided OR if the local proxy failed ---
     
     // 2. Attempt Direct Fetch
     logEvent(`[Fetch] Attempting direct fetch for: ${url.substring(0, 100)}...`);
@@ -80,24 +163,49 @@ const fetchWithCorsFallback = async (url: string, logEvent: (message: string) =>
         if (response.ok) {
             return response;
         }
-        logEvent(`[Fetch] Direct fetch for ${url} failed with status ${response.status}. Falling back to public proxies.`);
+        logEvent(`[Fetch] Direct fetch failed with status ${response.status}.`);
     } catch (error) {
-        logEvent(`[Fetch] Direct fetch for ${url} failed, likely due to CORS. Falling back to public proxies.`);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        logEvent(`[Fetch] Direct fetch failed. Error: ${errorMessage}. This could be a CORS issue or a network error. Falling back to proxies.`);
+        // Don't throw yet, fall back to public proxies.
     }
 
-    // 3. Fallback to Public Proxies
-    for (const buildProxyUrl of PROXY_BUILDERS) {
-        const publicProxyUrl = buildProxyUrl(url);
+    // 3. Fallback to Dynamic Public Proxies
+    logEvent('[Fetch] Falling back to dynamic public proxy list...');
+    
+    // Sort proxies by score, but also prioritize those that haven't been tried recently.
+    const sortedProxies = [...proxyList].sort((a, b) => {
+        const scoreDiff = b.score - a.score;
+        if (Math.abs(scoreDiff) > 2) return scoreDiff;
+        return a.lastAttempt - b.lastAttempt; // Try the least recently used one if scores are close
+    });
+
+    for (const proxy of sortedProxies) {
+        const now = Date.now();
+        // Don't retry a failing proxy too quickly
+        if (proxy.score < 0 && (now - proxy.lastAttempt) < 300000) { // 5 minutes
+            continue;
+        }
+
+        const publicProxyUrl = proxy.builder(url);
+        proxy.lastAttempt = now;
+
         try {
-            logEvent(`[Fetch] Attempting fetch via proxy: ${new URL(publicProxyUrl).hostname}`);
+            logEvent(`[Fetch] Attempting fetch via proxy (Score: ${proxy.score}): ${new URL(publicProxyUrl).hostname}`);
             const response = await fetch(publicProxyUrl, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+            
             if (response.ok) {
-                logEvent(`[Fetch] Success with proxy: ${new URL(publicProxyUrl).hostname}`);
+                logEvent(`[Fetch] Success with proxy: ${new URL(publicProxyUrl).hostname}. Increasing score.`);
+                proxy.score = Math.min(20, proxy.score + 2); // Cap score at 20
                 return response;
             }
-            logEvent(`[Fetch] WARN: Proxy failed with status ${response.status}.`);
+            
+            logEvent(`[Fetch] WARN: Proxy failed with status ${response.status}. Decreasing score.`);
+            proxy.score = Math.max(-10, proxy.score - 5); // Floor score at -10
+            
         } catch (error) {
-            logEvent(`[Fetch] WARN: Proxy threw an error.`);
+            logEvent(`[Fetch] WARN: Proxy threw an error. Decreasing score.`);
+            proxy.score = Math.max(-10, proxy.score - 5);
         }
     }
     throw new Error(`All direct and proxy fetch attempts failed for URL: ${url}`);
@@ -127,12 +235,17 @@ export const searchWeb = async (query: string, logEvent: (message: string) => vo
                     const actualLink = redirectUrl.searchParams.get('uddg');
 
                     if (actualLink) {
-                        results.push({
-                            link: actualLink,
-                            title: (titleLink.textContent || '').trim(),
-                            snippet: (snippetEl.textContent || '').trim(),
-                            source: 'WebSearch' as SearchDataSource.WebSearch
-                        });
+                        const canonicalLink = buildCanonicalUrl(actualLink);
+                        if (canonicalLink) { // Only add if the link is valid
+                            results.push({
+                                link: canonicalLink,
+                                title: (titleLink.textContent || '').trim(),
+                                snippet: (snippetEl.textContent || '').trim(),
+                                source: 'WebSearch' as SearchDataSource.WebSearch
+                            });
+                        } else {
+                             logEvent(`[Search.Web] WARN: Discarded invalid or unparseable link from search results: ${actualLink}`);
+                        }
                     }
                 }
             }
@@ -151,11 +264,19 @@ export const searchPubMed = async (query: string, logEvent: (message: string) =>
     const results: SearchResult[] = [];
     try {
         let specificQuery = `${query}[Title/Abstract]`;
+        const numericIdMatch = query.trim().match(/^(\d{1,10})$/);
+        if (numericIdMatch) {
+            const numericId = numericIdMatch[1];
+            specificQuery = `((${query}[Title/Abstract]) OR (${numericId}[UID]) OR (PMC${numericId}[PMCID]))`;
+            logEvent(`[Search.PubMed] Numeric ID detected. Expanding search for "${numericId}" to include UID and PMCID fields.`);
+        }
+        
         let dateFilter = '';
         if (sinceYear) {
             dateFilter = `&datetype=pdat&mindate=${sinceYear}`;
         }
         
+        // Step 1: Search for PubMed IDs
         const searchUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(specificQuery)}&retmode=json&sort=relevance&retmax=${limit}${dateFilter}`;
         
         const searchResponse = await fetchWithCorsFallback(searchUrl, logEvent, proxyUrl);
@@ -172,39 +293,84 @@ export const searchPubMed = async (query: string, logEvent: (message: string) =>
         }
 
         const ids: string[] = searchData?.esearchresult?.idlist;
-        if (!ids) {
-            logEvent(`[Search.PubMed] WARN: API response did not contain an idlist. Assuming no results.`);
+        if (!ids || ids.length === 0) {
+            logEvent(`[Search.PubMed] WARN: API response did not contain an idlist or was empty. Assuming no results.`);
             return [];
         }
-
-        if (ids && ids.length > 0) {
-            const summaryUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id=${ids.join(',')}&retmode=json`;
-            const summaryResponse = await fetchWithCorsFallback(summaryUrl, logEvent, proxyUrl);
-            if (!summaryResponse.ok) {
-                const errorText = await summaryResponse.text();
-                throw new Error(`PubMed summary API returned status ${summaryResponse.status}. Response: ${errorText.substring(0, 200)}`);
-            }
-
-            let summaryData;
-            try {
-                summaryData = await summaryResponse.json();
-            } catch(e) {
-                throw new Error(`PubMed summary API returned non-JSON response.`);
-            }
-            
-            ids.forEach(id => {
-                const article = summaryData?.result?.[id];
-                if (article) {
-                    results.push({
-                        link: `https://pubmed.ncbi.nlm.nih.gov/${id}/`,
-                        title: article.title,
-                        snippet: `Authors: ${article.authors.map((a: {name: string}) => a.name).join(', ')}. Journal: ${article.source}. PubDate: ${article.pubdate}`,
-                        source: 'PubMed' as SearchDataSource.PubMed
-                    });
+        
+        // Step 2: NEW - Use ID Converter API to reliably get PMCIDs
+        let pmidToPmcidMap: Record<string, string> = {};
+        try {
+            logEvent(`[Search.PubMed] Attempting to convert ${ids.length} PMIDs to PMCIDs...`);
+            const converterUrl = `https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/?ids=${ids.join(',')}&format=json`;
+            const converterResponse = await fetchWithCorsFallback(converterUrl, logEvent, proxyUrl);
+            if (converterResponse.ok) {
+                const converterData = await converterResponse.json();
+                if (converterData.records) {
+                    for (const record of converterData.records) {
+                        if (record.pmid && record.pmcid) {
+                            pmidToPmcidMap[record.pmid] = record.pmcid;
+                        }
+                    }
                 }
-            });
-             logEvent(`[Search.PubMed] Success via API, found ${results.length} results.`);
+                logEvent(`[Search.PubMed] Successfully converted ${Object.keys(pmidToPmcidMap).length} IDs.`);
+            } else {
+                 logEvent(`[Search.PubMed] WARN: ID Converter API failed with status ${converterResponse.status}. Links may not be optimal.`);
+            }
+        } catch (e) {
+            logEvent(`[Search.PubMed] WARN: ID Converter API call failed: ${e instanceof Error ? e.message : String(e)}. Links may not be optimal.`);
         }
+
+
+        // Step 3: Get Summaries
+        const summaryUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id=${ids.join(',')}&retmode=json`;
+        const summaryResponse = await fetchWithCorsFallback(summaryUrl, logEvent, proxyUrl);
+        if (!summaryResponse.ok) {
+            const errorText = await summaryResponse.text();
+            throw new Error(`PubMed summary API returned status ${summaryResponse.status}. Response: ${errorText.substring(0, 200)}`);
+        }
+
+        let summaryData;
+        try {
+            summaryData = await summaryResponse.json();
+        } catch(e) {
+            throw new Error(`PubMed summary API returned non-JSON response.`);
+        }
+        
+        for (const id of ids) {
+            const article = summaryData?.result?.[id];
+            if (article) {
+                let pmcid = pmidToPmcidMap[id] || article.articleids?.find((aid: any) => aid.idtype === 'pmc')?.value;
+                
+                // Defensively add PMC prefix if a numeric-only PMCID is returned
+                if (pmcid && /^\d+$/.test(pmcid)) {
+                    pmcid = 'PMC' + pmcid;
+                }
+
+                let finalLink;
+                if (pmcid) {
+                    // We have a confirmed PMCID, use the canonical builder for a PMC link.
+                    finalLink = buildCanonicalUrl(pmcid);
+                } else {
+                    // No PMCID was found. Fall back to the reliable PubMed link using the PMID.
+                    finalLink = buildCanonicalUrl(id);
+                }
+
+                if (!finalLink) {
+                    logEvent(`[Search.PubMed] WARN: Could not construct a valid URL for ID: ${pmcid || id}. Skipping result.`);
+                    continue;
+                }
+
+                results.push({
+                    link: finalLink,
+                    title: article.title,
+                    snippet: `Authors: ${article.authors.map((a: {name: string}) => a.name).join(', ')}. Journal: ${article.source}. PubDate: ${article.pubdate}`,
+                    source: 'PubMed' as SearchDataSource.PubMed
+                });
+            }
+        }
+         logEvent(`[Search.PubMed] Success via API, found ${results.length} results.`);
+        
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         logEvent(`[Search.PubMed] Error: ${message}`);
@@ -217,7 +383,15 @@ export const searchBioRxivPmcArchive = async (query: string, logEvent: (message:
     const results: SearchResult[] = [];
     try {
         const processedQuery = query.split(/\s+/).filter(term => term.length > 2).join(' OR ');
-        const enhancedQuery = `(("${query}") OR (${processedQuery})) AND biorxiv[journal]`;
+        let enhancedQuery = `(("${query}") OR (${processedQuery})) AND biorxiv[journal]`;
+
+        const numericIdMatch = query.trim().match(/^(\d{1,10})$/);
+        if (numericIdMatch) {
+            const numericId = numericIdMatch[1];
+            enhancedQuery = `((${enhancedQuery}) OR (PMC${numericId}[PMCID]))`;
+            logEvent(`[Search.BioRxiv] Numeric ID detected. Expanding search for "${numericId}" to include PMCID field.`);
+        }
+
         let dateFilter = '';
         if (sinceYear) {
             dateFilter = `&datetype=pdat&mindate=${sinceYear}`;
@@ -258,20 +432,31 @@ export const searchBioRxivPmcArchive = async (query: string, logEvent: (message:
                 throw new Error(`PMC summary API returned non-JSON response.`);
             }
             
-            ids.forEach(id => {
+            for (const id of ids) {
                 const article = summaryData?.result?.[id];
                 if (article) {
-                    const pmcId = article.articleids.find((aid: { idtype: string, value: string }) => aid.idtype === 'pmc')?.value;
-                    const link = pmcId ? `https://www.ncbi.nlm.nih.gov/pmc/articles/${pmcId}/` : `https://pubmed.ncbi.nlm.nih.gov/${id}/`;
+                    let pmcId = article.articleids.find((aid: { idtype: string, value: string }) => aid.idtype === 'pmc')?.value;
+                    
+                    // Defensively add PMC prefix if a numeric-only PMCID is returned
+                    if (pmcId && /^\d+$/.test(pmcId)) {
+                        pmcId = 'PMC' + pmcId;
+                    }
+
+                    const finalLink = buildCanonicalUrl(pmcId || id);
+
+                    if (!finalLink) {
+                         logEvent(`[Search.BioRxiv] WARN: Could not construct a valid URL for ID: ${pmcId || id}. Skipping result.`);
+                         continue;
+                    }
 
                     results.push({
-                        link: link,
+                        link: finalLink,
                         title: article.title,
                         snippet: `Authors: ${article.authors.map((a: {name: string}) => a.name).join(', ')}. PubDate: ${article.pubdate}.`,
                         source: 'BioRxivPmcArchive' as SearchDataSource.BioRxivPmcArchive
                     });
                 }
-            });
+            }
             logEvent(`[Search.BioRxiv] Success via PMC API, found ${results.length} results.`);
         }
     } catch (error) {
@@ -314,15 +499,23 @@ const extractDoi = (text: string): string | null => {
 };
 
 export const enrichSource = async (source: SearchResult, logEvent: (message: string) => void, proxyUrl?: string): Promise<SearchResult & { textContent?: string }> => {
-    if (source.snippet?.startsWith('[DOI Found]') || source.snippet?.startsWith('Fetch failed')) {
-        logEvent(`[Enricher] Skipping enrichment for ${source.link} as it appears to be already processed.`);
-        return source;
+    const canonicalUrl = buildCanonicalUrl(source.link);
+
+    if (!canonicalUrl) {
+        throw new Error(`Could not recognize or create a canonical URL from the initial link: "${source.link}"`);
     }
 
-    const doi = extractDoi(source.link);
+    if (source.snippet?.startsWith('[DOI Found]') || source.snippet?.startsWith('Fetch failed')) {
+        logEvent(`[Enricher] Skipping enrichment for ${canonicalUrl} as it appears to be already processed.`);
+        return { ...source, link: canonicalUrl }; // Return with the corrected link
+    }
+    
+    logEvent(`[Enricher] Processing canonical URL: ${canonicalUrl}`);
+
+    const doi = extractDoi(canonicalUrl);
     let server = '';
-    if (source.link.includes('biorxiv.org')) server = 'biorxiv';
-    else if (source.link.includes('medrxiv.org')) server = 'medrxiv';
+    if (canonicalUrl.includes('biorxiv.org')) server = 'biorxiv';
+    else if (canonicalUrl.includes('medrxiv.org')) server = 'medrxiv';
 
     // --- Strategy 1: BioRxiv/MedRxiv API ---
     if (doi && server) {
@@ -353,24 +546,83 @@ export const enrichSource = async (source: SearchResult, logEvent: (message: str
     }
 
     // --- Strategy 2: HTML Scraping (Fallback) ---
-    logEvent(`[Enricher] Using HTML scraping fallback for: ${source.link}`);
-    const urlToScrape = doi ? `https://doi.org/${doi}` : source.link;
+    logEvent(`[Enricher] Using HTML scraping fallback for: ${canonicalUrl}`);
+    
+    const urlsToTry: string[] = [canonicalUrl];
+    const isPubmedUrl = canonicalUrl.includes('pubmed.ncbi.nlm.nih.gov');
+    const pubmedIdMatch = canonicalUrl.match(/pubmed\.ncbi\.nlm\.nih\.gov\/(\d+)/);
+
+    if (isPubmedUrl && pubmedIdMatch && pubmedIdMatch[1]) {
+        const pubmedId = pubmedIdMatch[1];
+        
+        // --- Best Effort PMC URL Construction (Added for resilience) ---
+        // Manually construct a potential PMC URL. This is not guaranteed to be correct 
+        // for all IDs but adds a crucial fallback if the conversion API fails.
+        const bestEffortPmcUrl = buildCanonicalUrl(`PMC${pubmedId}`);
+        if (bestEffortPmcUrl) {
+            logEvent(`[Enricher] Adding best-effort guess for PMC URL to attempts: ${bestEffortPmcUrl}`);
+            urlsToTry.unshift(bestEffortPmcUrl);
+        }
+
+        // --- Official ID Converter API (Still preferred) ---
+        logEvent(`[Enricher] PubMed link detected. Attempting official conversion for PMID: ${pubmedId}`);
+        try {
+            const converterUrl = `https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/?ids=${pubmedId}&format=json`;
+            const converterResponse = await fetchWithCorsFallback(converterUrl, logEvent, proxyUrl);
+            if (converterResponse.ok) {
+                const converterData = await converterResponse.json();
+                const record = converterData?.records?.[0];
+                if (record && record.pmcid) {
+                    const officialPmcUrl = buildCanonicalUrl(record.pmcid);
+                    if (officialPmcUrl) {
+                        logEvent(`[Enricher] Found official PMCID ${record.pmcid}. Prioritizing official PMC URL.`);
+                        // Ensure no duplicates and put the official one first.
+                        const urlSet = new Set([officialPmcUrl, ...urlsToTry]);
+                        urlsToTry.splice(0, urlsToTry.length, ...Array.from(urlSet));
+                    }
+                } else {
+                    logEvent(`[Enricher] No PMCID found via API for PMID ${pubmedId}. Will proceed with guessed PMC and original PubMed URLs.`);
+                }
+            } else {
+                logEvent(`[Enricher] WARN: ID Converter API failed with status ${converterResponse.status}. Will proceed with guessed PMC and original PubMed URLs.`);
+            }
+        } catch (e) {
+            logEvent(`[Enricher] WARN: ID Converter API call failed: ${e instanceof Error ? e.message : String(e)}. Will proceed with guessed PMC and original PubMed URLs.`);
+        }
+    }
+    
+    let response: Response | null = null;
+    let successfulUrl: string | null = null;
+    let lastError: any = null;
+
+    for (const url of [...new Set(urlsToTry)]) { // De-duplicate URLs before trying
+        try {
+            logEvent(`[Enricher] Attempting to scrape: ${url}`);
+            response = await fetchWithCorsFallback(url, logEvent, proxyUrl);
+            successfulUrl = url;
+            break; // Success, exit loop
+        } catch (error) {
+            lastError = error;
+            const message = error instanceof Error ? error.message : 'Unknown error';
+            logEvent(`[Enricher] Attempt failed for ${url}: ${message}.`);
+        }
+    }
+
+    if (!response || !successfulUrl) {
+        logEvent(`[Enricher] ERROR: All fetch attempts failed for source link: ${source.link}.`);
+        // Re-throw the last error to be caught by the workflow for adaptive retries.
+        throw lastError;
+    }
 
     try {
-        const response = await fetchWithCorsFallback(urlToScrape, logEvent, proxyUrl);
-        
-        // If we are using our local proxy, the response.url will be the proxy's URL.
-        // We should always use the original URL we intended to scrape as the canonical link in this case.
-        // For public proxies or direct fetches, response.url might reflect a true redirect from the target site.
-        const finalUrl = response.url;
-        const linkToSave = proxyUrl 
-            ? urlToScrape // If local proxy is used, ALWAYS trust the original URL
-            : (finalUrl && !finalUrl.includes('corsproxy') && !finalUrl.includes('allorigins') && !finalUrl.includes('thingproxy'))
-                ? finalUrl // For public proxies or direct, check for redirects, but ignore proxy domains
-                : urlToScrape; // Default to original URL
+        if (!response.ok) {
+            throw new Error(`Fetch was successful but returned a non-OK status code: ${response.status} ${response.statusText}`);
+        }
 
-        if (linkToSave !== urlToScrape && !proxyUrl) { // Only log redirects if it's not our local proxy
-            logEvent(`[Enricher] URL redirected to canonical: "${linkToSave}"`);
+        const linkToSave = successfulUrl; 
+
+        if (linkToSave !== canonicalUrl) {
+            logEvent(`[Enricher] URL successfully fetched via fallback: "${linkToSave}"`);
         }
 
         const html = await response.text();
@@ -467,13 +719,8 @@ export const enrichSource = async (source: SearchResult, logEvent: (message: str
 
     } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
-        logEvent(`[Enricher] ERROR: Failed to fetch or parse ${urlToScrape}: ${message}.`);
-        const fallbackTitle = doi ? `DOI: ${doi}` : source.title;
-
-        return {
-            ...source,
-            title: fallbackTitle,
-            snippet: `Fetch failed. Could not retrieve content from the source.`
-        };
+        logEvent(`[Enricher] ERROR: Failed to parse ${successfulUrl}: ${message}.`);
+        // Re-throw the original error to be caught by the workflow for adaptive retries.
+        throw error;
     }
 };

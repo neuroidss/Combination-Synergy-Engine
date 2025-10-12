@@ -1,5 +1,3 @@
-
-
 // VIBE_NOTE: Do not escape backticks or dollar signs in template literals in this file.
 // Escaping is only for 'implementationCode' strings in tool definitions.
 import React, { useCallback, useRef, useMemo } from 'react';
@@ -87,6 +85,8 @@ export const useAppRuntime = () => {
             patents: (query: string, limit: number, proxyUrl?: string) => searchService.searchGooglePatents(query, stateManager.logEvent, limit, proxyUrl),
             web: (query: string, limit: number, proxyUrl?: string) => searchService.searchWeb(query, stateManager.logEvent, limit, proxyUrl),
             enrichSource: (source: SearchResult, proxyUrl?: string) => searchService.enrichSource(source, stateManager.logEvent, proxyUrl),
+            updateProxyList: (newBuilderStrings: string[]) => searchService.updateProxyList(newBuilderStrings),
+            getProxyList: () => searchService.getProxyList(),
         },
         ai: {
             generateText: (text: string, systemInstruction: string, files: { type: string, data: string }[] = []) => {

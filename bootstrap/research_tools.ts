@@ -1,7 +1,101 @@
-
 import type { ToolCreatorPayload } from '../types';
 
 export const RESEARCH_TOOLS: ToolCreatorPayload[] = [
+    {
+        name: 'DiscoverProxyBuilders',
+        description: 'Uses an AI model to discover and generate code for new public CORS proxy services. This is a powerful adaptation mechanism to bypass content blockades when existing proxies fail.',
+        category: 'Functional',
+        executionEnvironment: 'Client',
+        purpose: 'To enable the agent to invent new ways to access web content, making the research process more resilient and adaptive to network restrictions.',
+        parameters: [],
+        implementationCode: `
+            runtime.logEvent('[Discovery] Attempting to discover new CORS proxy strategies...');
+            const systemInstruction = \`You are an expert at bypassing CORS. Your task is to find and provide code for public CORS proxy services.
+You MUST respond with ONLY a single, valid JSON object in the following format:
+{
+  "proxy_builder_strings": [
+    "(url) => \\\`https://corsproxy.io/?\\\${encodeURIComponent(url)}\\\`",
+    "(url) => \\\`https://api.allorigins.win/raw?url=\\\${encodeURIComponent(url)}\\\`"
+  ]
+}
+Find 2-3 MORE different, currently active public CORS proxies and provide their function strings in the same format. Do not include the examples I provided.\`;
+
+            const prompt = "Find new, publicly available CORS proxy services and provide the corresponding JavaScript arrow functions to format a URL for them.";
+
+            const aiResponseText = await runtime.ai.generateText(prompt, systemInstruction);
+            let builderStrings = [];
+            try {
+                const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
+                if (!jsonMatch) throw new Error("No valid JSON response for proxy builders.");
+                const parsed = JSON.parse(jsonMatch[0]);
+                builderStrings = parsed.proxy_builder_strings;
+                if (!Array.isArray(builderStrings) || builderStrings.length === 0) {
+                    throw new Error("AI did not generate a valid array of proxy builder strings.");
+                }
+            } catch(e) {
+                throw new Error('Failed to discover proxy builders: ' + e.message);
+            }
+
+            runtime.logEvent(\`[Discovery] ✅ Discovered \${builderStrings.length} new potential proxy strategies.\`);
+            return { success: true, newBuilderStrings: builderStrings };
+        `
+    },
+    {
+        name: 'Export Learned Skills',
+        description: 'Exports the definitions of user-created tools and currently learned proxy strategies as a JSON object.',
+        category: 'Automation',
+        executionEnvironment: 'Client',
+        purpose: 'To allow the user to inspect, save, and share the new skills and adaptations the agent has learned during its operation.',
+        parameters: [],
+        implementationCode: `
+            runtime.logEvent('[Export] Exporting learned skills and strategies...');
+            const allTools = runtime.tools.list();
+            
+            // A list of hardcoded tool names that are part of the initial bootstrap
+            const bootstrapToolNames = new Set([
+                "Core Architectural Principle: Multiple Tool Calls Over JSON", "Workflow Creator", "Propose Skill From Observation",
+                "Task Complete", "Tool Creator", "Debug Log View", "Server File Writer", "Start Node Process",
+                "Start Python Process", "Stop Process", "List Managed Processes", "Execute Full Research and Proposal Workflow",
+                "Bootstrap Web Proxy Service", "Test Web Proxy Service", "Refine Search Queries", "Diagnose and Retry Search",
+                "Federated Scientific Search", "Read Webpage Content", "Extract References from Source",
+                "Embed All Sources", "Generate 2D Map Coordinates", "Chunk and Embed Scientific Articles",
+                "Hypothesis Generator via Conceptual Search", "Identify Meta-Analyses", "Analyze Single Source for Synergies",
+                "Score Single Synergy", "Generate Proposal for Single Synergy", "Critique Investment Proposal",
+                "Rank Synergies by Promise", "RecordRefinedQueries", "RecordValidatedSource", "RecordMetaAnalysis",
+                "RecordPrimaryStudy", "RecordSynergy", "RecordSynergyGameParameters", "RecordTrialDossier",
+                "RecordCritique", "RecordErrorAnalysis", "Diagnose Tool Execution Error", "InterpretVacancy",
+                "FindPersonalizedVacancies", "CreateUserAgingVector", "ProjectUserOntoMap", "Synergy Forge Main UI",
+                "AdaptFetchStrategy", "DiscoverProxyBuilders", "Find and Validate Single Source", "Export Learned Skills"
+            ]);
+
+            const learnedTools = allTools.filter(tool => !bootstrapToolNames.has(tool.name));
+
+            const proxyBuilders = await runtime.search.getProxyList();
+
+            const exportData = {
+                learnedTools: learnedTools.map(t => ({
+                    name: t.name,
+                    description: t.description,
+                    category: t.category,
+                    executionEnvironment: t.executionEnvironment,
+                    parameters: t.parameters,
+                    implementationCode: t.implementationCode,
+                    purpose: t.purpose,
+                })),
+                learnedProxyStrategies: proxyBuilders.map(p => p.builderString),
+            };
+
+            runtime.logEvent(\`[Export] ✅ Exported \${learnedTools.length} learned tools and \${proxyBuilders.length} proxy strategies.\`);
+            console.log('--- EXPORTED SKILLS ---');
+            console.log(JSON.stringify(exportData, null, 2));
+
+            return { 
+                success: true, 
+                message: 'Exported data has been logged to the browser console.',
+                exportedData 
+            };
+        `
+    },
     {
         name: 'Generate Conceptual Queries from Objective',
         description: 'Analyzes a research objective and existing literature to generate high-level conceptual questions for discovering novel, unstated synergies.',
@@ -214,111 +308,66 @@ You MUST respond with ONLY a single, valid JSON object in the following format:
         `,
     },
     {
-        name: 'Enrich and Validate Sources',
-        description: 'Takes a list of search results, enriches them by fetching their content one-by-one to avoid rate-limiting, then uses an AI to validate, summarize, and score each source individually for maximum reliability.',
+        name: 'Find and Validate Single Source',
+        description: 'A resilient tool that takes a single search result, tries multiple methods to fetch its full content, then uses an AI to validate, summarize, and score it against the research objective.',
         category: 'Functional',
         executionEnvironment: 'Client',
-        purpose: 'To programmatically verify a list of search results link to valid scientific articles and to extract summaries from the confirmed sources using a resilient, sequential AI validation process.',
+        purpose: 'To provide a robust, single-source validation pipeline that can be iteratively called by a workflow, allowing for graceful error handling and retries.',
         parameters: [
-            { name: 'searchResults', type: 'array', description: 'An array of search result objects, each containing a "title" and a "link".', required: true },
-            { name: 'proxyUrl', type: 'string', description: 'The URL of the bootstrapped web proxy service to use for fetching content.', required: false },
+            { name: 'searchResult', type: 'object', description: 'A single search result object containing a "title" and a "link".', required: true },
             { name: 'researchObjective', type: 'string', description: 'The original research objective to provide context for summarization and validation.', required: true },
+            { name: 'proxyUrl', type: 'string', description: 'Optional. The URL of a web proxy service to use for fetching content.', required: false },
         ],
         implementationCode: `
-            const { searchResults, proxyUrl, researchObjective } = args;
-            if (!Array.isArray(searchResults) || searchResults.length === 0) {
-                return { success: true, validatedSources: [] };
-            }
-            
-            runtime.logEvent(\`[Validator] Starting enrichment for \${searchResults.length} sources... Using proxy: \${proxyUrl || 'default'}\`);
-            
-            // Enrich sources sequentially to avoid rate limiting
-            const enrichedResults = [];
-            for (const [index, res] of searchResults.entries()) {
-                runtime.logEvent(\`[Enricher] Processing source \${index + 1}/\${searchResults.length}: \${res.link.substring(0, 70)}...\`);
-                try {
-                    const enriched = await runtime.search.enrichSource(res, proxyUrl);
-                    enrichedResults.push(enriched);
-                } catch (e) {
-                    runtime.logEvent(\`[Enricher] ERROR: Failed to enrich source \${res.link}: \${e.message}\`);
-                    enrichedResults.push({ ...res, snippet: \`Fetch failed. Could not retrieve content from the source.\` });
-                }
-                // Delay to avoid rate-limiting
-                await new Promise(resolve => setTimeout(resolve, 350));
+            const { searchResult, researchObjective, proxyUrl } = args;
+
+            // Step 1: Enrich the source by fetching its content
+            runtime.logEvent(\`[Validator] Enriching: \${searchResult.link.substring(0, 70)}...\`);
+            const enrichedSource = await runtime.search.enrichSource(searchResult, proxyUrl);
+            if (!enrichedSource || !enrichedSource.snippet || enrichedSource.snippet.startsWith('Fetch failed')) {
+                throw new Error('Failed to fetch or enrich content for the source.');
             }
 
-            const successfullyEnriched = enrichedResults.filter(res => res.snippet && !res.snippet.startsWith('Fetch failed'));
-            if (successfullyEnriched.length < enrichedResults.length) {
-                runtime.logEvent(\`[Validator] WARN: Dropped \${enrichedResults.length - successfullyEnriched.length} sources due to fetch/enrichment failures.\`);
-            }
-            if (successfullyEnriched.length === 0) {
-                runtime.logEvent('[Validator] No sources could be successfully enriched. Halting validation.');
-                return { success: true, validatedSources: [] };
-            }
+            // Step 2: Validate the enriched content using an AI model
+            runtime.logEvent(\`[Validator] Validating: \${enrichedSource.title.substring(0, 50)}...\`);
+            const validationContext = \`<PRIMARY_SOURCE>\\n<TITLE>\${enrichedSource.title}</TITLE>\\n<URL>\${enrichedSource.link}</URL>\\n<SNIPPET>\\n\${enrichedSource.snippet}\\n</SNIPPET>\\n</PRIMARY_SOURCE>\`;
             
-            runtime.logEvent(\`[Validator] Enrichment complete. Sending \${successfullyEnriched.length} sources to AI for validation one-by-one for increased reliability.\`);
-            
-            const allValidatedSources = [];
-            
-            for (const source of successfullyEnriched) {
-                 try {
-                    const validationContext = \`<PRIMARY_SOURCE>\\n<TITLE>\${source.title}</TITLE>\\n<URL>\${source.link}</URL>\\n<SNIPPET>\\n\${source.snippet}\\n</SNIPPET>\\n</PRIMARY_SOURCE>\`;
-                    
-                    const systemInstruction = \`You are an automated data extraction service. Your SOLE function is to analyze the provided scientific source and call the 'RecordValidatedSource' tool.
+            const systemInstruction = \`You are an automated data extraction service. Your SOLE function is to analyze the provided scientific source and call the 'RecordValidatedSource' tool.
 - You must provide a concise summary, a reliability score (0.0-1.0), and a justification for the score.
 - CRITICAL: Do NOT write ANY text or explanations. Your entire response MUST consist of a single tool call.\`;
-                    
-                    const validationPrompt = 'Research Objective: "' + researchObjective + '"\\n\\nBased on the objective, assess, summarize, and record the following source by calling the \\'RecordValidatedSource\\' tool.\\n\\n' + validationContext;
+            
+            const validationPrompt = 'Research Objective: "' + researchObjective + '"\\n\\nBased on the objective, assess, summarize, and record the following source by calling the \\'RecordValidatedSource\\' tool.\\n\\n' + validationContext;
 
-                    const recordTool = runtime.tools.list().find(t => t.name === 'RecordValidatedSource');
-                    if (!recordTool) throw new Error("Core tool 'RecordValidatedSource' not found.");
+            const recordTool = runtime.tools.list().find(t => t.name === 'RecordValidatedSource');
+            if (!recordTool) throw new Error("Core tool 'RecordValidatedSource' not found.");
 
-                    const aiResponse = await runtime.ai.processRequest(validationPrompt, systemInstruction, [recordTool]);
+            const aiResponse = await runtime.ai.processRequest(validationPrompt, systemInstruction, [recordTool]);
 
-                    if (!aiResponse || !aiResponse.toolCalls || aiResponse.toolCalls.length !== 1) {
-                        let analysis = "AI did not return exactly one tool call for this source.";
-                        if (aiResponse && aiResponse.text && aiResponse.text.trim()) {
-                            analysis += \` AI's textual response was: "\${aiResponse.text.trim()}"\`;
-                        } else if (aiResponse && aiResponse.toolCalls && aiResponse.toolCalls.length > 1) {
-                            analysis += \` Instead, it returned \${aiResponse.toolCalls.length} tool calls.\`;
-                        } else {
-                            analysis += " The AI returned no tool calls and no text.";
-                        }
-                        throw new Error(analysis);
-                    }
-                    
-                    const toolCall = aiResponse.toolCalls[0];
-                    if (toolCall.name === 'RecordValidatedSource') {
-                        const executionResult = await runtime.tools.run(toolCall.name, toolCall.arguments);
-                        if(executionResult.validatedSource) {
-                            allValidatedSources.push({
-                                url: executionResult.validatedSource.uri,
-                                title: executionResult.validatedSource.title,
-                                summary: executionResult.validatedSource.summary,
-                                reliabilityScore: executionResult.validatedSource.reliability,
-                                justification: executionResult.validatedSource.reliabilityJustification,
-                                textContent: source.textContent, // Carry over the full text
-                            });
-                            runtime.logEvent(\`[Validator] ✅ Validated: \${source.title.substring(0, 50)}...\`);
-                        }
-                    } else {
-                        throw new Error("AI called an unexpected tool: " + toolCall.name);
-                    }
-                } catch (e) {
-                    runtime.logEvent(\`[Validator] ❌ ERROR validating source: \${source.title.substring(0,50)}... Error: \${e.message}. Skipping.\`);
+            if (!aiResponse || !aiResponse.toolCalls || aiResponse.toolCalls.length !== 1 || aiResponse.toolCalls[0].name !== 'RecordValidatedSource') {
+                let analysis = "AI did not return exactly one 'RecordValidatedSource' tool call.";
+                if (aiResponse && aiResponse.text && aiResponse.text.trim()) {
+                    analysis += \` AI's textual response was: "\${aiResponse.text.trim()}"\`;
                 }
-                // Add a delay to avoid rate-limiting
-                await new Promise(resolve => setTimeout(resolve, 1000));
+                throw new Error(analysis);
             }
-
-            runtime.logEvent('[Validator] ✅ Validation finished. ' + allValidatedSources.length + ' of ' + successfullyEnriched.length + ' sources were validated.');
-
-            return {
-                success: true,
-                message: 'Validation complete. ' + allValidatedSources.length + ' of ' + searchResults.length + ' sources were validated.',
-                validatedSources: allValidatedSources,
+            
+            // Step 3: Record the validated source
+            const toolCall = aiResponse.toolCalls[0];
+            const executionResult = await runtime.tools.run(toolCall.name, toolCall.arguments);
+            if (!executionResult || !executionResult.validatedSource) {
+                throw new Error("Recording the validated source failed.");
+            }
+            
+            const finalValidatedSource = {
+                ...executionResult.validatedSource,
+                url: executionResult.validatedSource.uri, // Align property names
+                textContent: enrichedSource.textContent, // Carry over the full text
             };
-        `,
+
+            runtime.logEvent(\`[Validator] ✅ Validated: \${finalValidatedSource.title.substring(0, 50)}...\`);
+            
+            return { success: true, validatedSource: finalValidatedSource };
+        `
     },
     {
         name: 'Read Webpage Content',
