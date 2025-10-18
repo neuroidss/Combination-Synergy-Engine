@@ -49,12 +49,25 @@ const App: React.FC = () => {
                         startSwarmTask: appRuntime.startSwarmTask,
                         lastSwarmRunHistory: appRuntime.lastSwarmRunHistory,
                         liveSwarmHistory: appRuntime.liveSwarmHistory,
+                        liveFeed: appRuntime.liveFeed,
+                        setLiveFeed: appRuntime.setLiveFeed,
                         eventLog: appRuntime.eventLog,
                         availableModels: AI_MODELS,
                         selectedModel: appRuntime.selectedModel,
                         setSelectedModel: appRuntime.setSelectedModel,
                         apiConfig: appRuntime.apiConfig,
                         setApiConfig: appRuntime.setApiConfig,
+                        // Pass persistent map state and setters
+                        allSources: appRuntime.allSources,
+                        setAllSources: appRuntime.setAllSources,
+                        mapData: appRuntime.mapData,
+                        setMapData: appRuntime.setMapData,
+                        pcaModel: appRuntime.pcaModel,
+                        setPcaModel: appRuntime.setPcaModel,
+                        mapNormalization: appRuntime.mapNormalization,
+                        setMapNormalization: appRuntime.setMapNormalization,
+                        taskPrompt: appRuntime.taskPrompt,
+                        setTaskPrompt: appRuntime.setTaskPrompt,
                     }} 
                 />
             ) : (

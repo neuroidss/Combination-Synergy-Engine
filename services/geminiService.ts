@@ -38,7 +38,7 @@ const buildGeminiTools = (tools: LLMTool[]): FunctionDeclaration[] => {
                 obj[param.name] = {
                     type: mapTypeToGemini(param.type),
                     description: isComplexType 
-                        ? `\${param.description} (This argument must be a valid, JSON-formatted string.)`
+                        ? `${param.description} (This argument must be a valid, JSON-formatted string.)`
                         : param.description,
                 };
                 return obj;
@@ -97,7 +97,7 @@ export const generateWithTools = async (
                     try {
                         parsedArgs[param.name] = JSON.parse(parsedArgs[param.name]);
                     } catch (e) {
-                        console.warn(`[Gemini Service] Failed to parse JSON string for argument '\${param.name}' in tool '\${originalName}'. Leaving as string. Error: \${e}`);
+                        console.warn(`[Gemini Service] Failed to parse JSON string for argument '${param.name}' in tool '${originalName}'. Leaving as string. Error: ${e}`);
                     }
                 }
             }

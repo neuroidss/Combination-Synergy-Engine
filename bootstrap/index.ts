@@ -26,16 +26,38 @@ const SYNERGY_FORGE_TOOLS: ToolCreatorPayload[] = [{
         { name: 'startSwarmTask', type: 'object', description: 'A function to initiate a new task for the agent swarm.', required: true },
         { name: 'lastSwarmRunHistory', type: 'array', description: 'An array containing the execution history of the last completed swarm task.', required: true },
         { name: 'liveSwarmHistory', type: 'array', description: 'An array containing the real-time execution history of the current swarm task.', required: true },
+        { name: 'liveFeed', type: 'array', description: 'The unified feed of all results (sources, synergies, etc.).', required: true },
+        { name: 'setLiveFeed', type: 'object', description: 'Function to update the liveFeed.', required: true },
         { name: 'eventLog', type: 'array', description: 'The global application event log.', required: true },
         { name: 'availableModels', type: 'array', description: 'An array of available AI models for selection.', required: true },
         { name: 'selectedModel', type: 'object', description: 'The currently selected AI model object.', required: true },
         { name: 'setSelectedModel', type: 'object', description: 'A function to update the selected AI model.', required: true },
         { name: 'apiConfig', type: 'object', description: 'The current API configuration object.', required: true },
         { name: 'setApiConfig', type: 'object', description: 'A function to update the API configuration.', required: true },
+        // Props for persistent map state
+        { name: 'allSources', type: 'array', description: 'All validated sources discovered.', required: true },
+        { name: 'setAllSources', type: 'object', description: 'Function to update allSources.', required: true },
+        { name: 'mapData', type: 'array', description: '2D coordinates and data for the discovery map.', required: true },
+        { name: 'setMapData', type: 'object', description: 'Function to update mapData.', required: true },
+        { name: 'pcaModel', type: 'object', description: 'The trained PCA model for dimensionality reduction.', required: true },
+        { name: 'setPcaModel', type: 'object', description: 'Function to update the PCA model.', required: true },
+        { name: 'mapNormalization', type: 'object', description: 'Normalization bounds for the map.', required: true },
+        { name: 'setMapNormalization', type: 'object', description: 'Function to update map normalization.', required: true },
+        { name: 'taskPrompt', type: 'string', description: 'The current research objective prompt.', required: true },
+        { name: 'setTaskPrompt', type: 'object', description: 'Function to update the research objective prompt.', required: true },
     ],
     implementationCode: `
 ${ORGANOID_SIMULATION_CODE}
 ${UI_COMPONENTS_CODE}
+
+const isInitialLoad = React.useRef(true);
+React.useEffect(() => {
+    // This ref is used to prevent expensive operations from running on the initial load from cache.
+    const timer = setTimeout(() => {
+        isInitialLoad.current = false;
+    }, 1500); // Wait a moment for all initial state to settle.
+    return () => clearTimeout(timer);
+}, []);
 
 // --- PERSONALIZATION STATE ---
 const [userAgingVector, setUserAgingVector] = React.useState(null);
@@ -55,92 +77,187 @@ const interventionEffects = React.useRef({
     social: getInitialInterventionEffects(),
 });
 
-const [taskPrompt, setTaskPrompt] = React.useState('Discover a broad range of longevity interventions (e.g., drugs, supplements, lifestyle changes) and analyze them to find both known and novel synergistic combinations.');
 const [sortConfig, setSortConfig] = React.useState({ key: 'trialPriorityScore', direction: 'desc' });
 const [progressInfo, setProgressInfo] = React.useState({ step: 0, total: 0, message: '', eta: 0 });
 const taskStartTime = React.useRef(null);
 const [isRescoring, setIsRescoring] = React.useState(false);
 const [generatingDossiers, setGeneratingDossiers] = React.useState(new Set());
+const [isVentureRunning, setIsVentureRunning] = React.useState(false);
+const [dataContextPrompt, setDataContextPrompt] = React.useState('');
+
+React.useEffect(() => {
+    // On mount, if data was loaded from cache, we record which prompt it belongs to.
+    // This is used by handleStart to decide if a reset is needed.
+    if (liveFeed.length > 0) {
+        setDataContextPrompt(taskPrompt);
+    }
+}, []);
+
+
+const lastHistoryLength = React.useRef(0);
 
 // REAL-TIME STATES
-const [liveFeed, setLiveFeed] = React.useState([]);
-const [allSources, setAllSources] = React.useState([]);
-const [mapData, setMapData] = React.useState([]);
 const [vacancies, setVacancies] = React.useState([]);
 const [isInterpreting, setIsInterpreting] = React.useState(false);
 const [isMapLoading, setIsMapLoading] = React.useState(false);
+const [feedView, setFeedView] = React.useState('live');
+const [rankedHypotheses, setRankedHypotheses] = React.useState([]);
 
-const updateMapRealtime = React.useCallback(async (sources) => {
-    if (!sources || sources.length < 3) { // Need at least 3 points for a meaningful map
-        setMapData([]);
-        setVacancies([]);
-        return;
-    }
+const updateMapRealtime = React.useCallback(async (newlyAddedSources) => {
+    if (!newlyAddedSources || newlyAddedSources.length === 0) return;
 
     setIsMapLoading(true);
-    runtime.logEvent('[Discovery Map] Change detected. Re-generating semantic map...');
+    runtime.logEvent('[Discovery Map] New sources detected. Updating semantic map...');
+
     try {
-        // Step 1: Embed all sources
-        const embedResult = await runtime.tools.run('Embed All Sources', { sources });
-        if (!embedResult || !embedResult.embeddedSources) {
-            throw new Error("Embedding step failed.");
-        }
-        const embeddedSources = embedResult.embeddedSources;
+        const { PCA } = await import('https://esm.sh/ml-pca');
 
-        // Step 2: Generate 2D coordinates using PCA
-        const mapGenResult = await runtime.tools.run('Generate 2D Map Coordinates', { embeddedSources });
-        if (!mapGenResult || !mapGenResult.mapData) {
-            throw new Error("Map coordinate generation step failed.");
-        }
-        const newMapData = mapGenResult.mapData;
-
-        // Step 3: Find vacancies using grid-based density
-        const newVacancies = [];
-        const mapSize = 500;
-        const gridSize = 20; // 20x20 grid
-        const cellSize = mapSize / gridSize;
-        const grid = Array(gridSize).fill(0).map(() => Array(gridSize).fill(0));
-
-        for (const point of newMapData) {
-            const gridX = Math.floor(point.x / cellSize);
-            const gridY = Math.floor(point.y / cellSize);
-            if (grid[gridX] && grid[gridX][gridY] !== undefined) {
-                grid[gridX][gridY]++;
+        if (!pcaModel) {
+            const sourcesForInitialMap = [...allSources, ...newlyAddedSources];
+            const INITIAL_MAP_THRESHOLD = 10;
+            if (sourcesForInitialMap.length < INITIAL_MAP_THRESHOLD) {
+                runtime.logEvent(\`[Discovery Map] Waiting for more sources to build initial map (\${sourcesForInitialMap.length}/\${INITIAL_MAP_THRESHOLD}).\`);
+                setIsMapLoading(false);
+                return;
             }
+            
+            runtime.logEvent(\`[Discovery Map] Generating initial semantic map with \${sourcesForInitialMap.length} sources...\`);
+            
+            const embedResult = await runtime.tools.run('Embed All Sources', { sources: sourcesForInitialMap });
+            const allEmbeddedSources = embedResult.embeddedSources;
+            const vectors = allEmbeddedSources.map(s => s.embedding);
+            const newPcaModel = new PCA(vectors);
+            setPcaModel(newPcaModel.toJSON()); // Store the serializable model state
+
+            const coordinates = newPcaModel.predict(vectors, { nComponents: 2 }).to2DArray();
+            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+            for (const coord of coordinates) {
+                minX = Math.min(minX, coord[0]);
+                maxX = Math.max(maxX, coord[0]);
+                minY = Math.min(minY, coord[1]);
+                maxY = Math.max(maxY, coord[1]);
+            }
+            const newMapNormalization = { minX, maxX, minY, maxY };
+            setMapNormalization(newMapNormalization);
+
+            const mapSize = 500;
+            const padding = mapSize * 0.05;
+            const initialMapPoints = allEmbeddedSources.map((source, index) => {
+                const [x, y] = coordinates[index];
+                const normalizedX = (maxX - minX > 0) ? (x - minX) / (maxX - minX) : 0.5;
+                const normalizedY = (maxY - minY > 0) ? (y - minY) / (maxY - minY) : 0.5;
+                return { source, x: normalizedX * (mapSize - 2 * padding) + padding, y: normalizedY * (mapSize - 2 * padding) + padding, isNew: true };
+            });
+            
+            setMapData(initialMapPoints);
+
+        } else {
+            runtime.logEvent(\`[Discovery Map] Projecting \${newlyAddedSources.length} new sources onto existing map...\`);
+            
+            const loadedPcaModel = PCA.load(pcaModel);
+            const embedResult = await runtime.tools.run('Embed All Sources', { sources: newlyAddedSources });
+            const embeddedNewSources = embedResult.embeddedSources;
+            const vectors = embeddedNewSources.map(s => s.embedding);
+            const coordinates = loadedPcaModel.predict(vectors, { nComponents: 2 }).to2DArray();
+            
+            const { minX, maxX, minY, maxY } = mapNormalization;
+            const mapSize = 500;
+            const padding = mapSize * 0.05;
+
+            const newMapPoints = embeddedNewSources.map((source, index) => {
+                const [x, y] = coordinates[index];
+                const normalizedX = (maxX - minX > 0) ? (x - minX) / (maxX - minX) : 0.5;
+                const normalizedY = (maxY - minY > 0) ? (y - minY) / (maxY - minY) : 0.5;
+                return { source, x: normalizedX * (mapSize - 2 * padding) + padding, y: normalizedY * (mapSize - 2 * padding) + padding, isNew: true };
+            });
+            
+            setMapData(prev => [...prev.map(p => ({...p, isNew: false})), ...newMapPoints]);
         }
         
-        const vacancyThreshold = 1; // Cells with this many points or fewer are vacancies
-        for (let i = 0; i < gridSize; i++) {
-            for (let j = 0; j < gridSize; j++) {
-                if (grid[i][j] <= vacancyThreshold) {
-                    newVacancies.push({
-                        id: \`v-\${i}-\${j}\`,
-                        x: (i + 0.5) * cellSize, // Center of the cell
-                        y: (j + 0.5) * cellSize,
-                        radius: cellSize * 0.7, // Make radius slightly smaller than cell
-                    });
-                }
-            }
-        }
-        
-        setMapData(newMapData);
-        setVacancies(newVacancies);
-        runtime.logEvent(\`[Discovery Map] ✅ Map updated with \${newMapData.length} sources and \${newVacancies.length} potential vacancies.\`);
-
     } catch (e) {
-        runtime.logEvent(\`[Discovery Map] ❌ Error generating map: \${e.message}\`);
-        // Don't clear map on error, keep the old one
+        runtime.logEvent(\`[Discovery Map] ❌ Error updating map: \${e.message}\`);
     } finally {
         setIsMapLoading(false);
     }
-}, [runtime]);
+}, [runtime, allSources, pcaModel, mapNormalization, setPcaModel, setMapNormalization, setMapData]);
+
+React.useEffect(() => {
+    // Recalculate vacancies whenever mapData changes.
+    if (mapData.length === 0) {
+        setVacancies([]);
+        return;
+    }
+    const newVacancies = [];
+    const mapSize = 500;
+    const gridSize = 20;
+    const cellSize = mapSize / gridSize;
+    const grid = Array(gridSize).fill(0).map(() => Array(gridSize).fill(0));
+    for (const point of mapData) {
+        const gridX = Math.floor(point.x / cellSize);
+        const gridY = Math.floor(point.y / cellSize);
+        if (grid[gridX] && grid[gridX][gridY] !== undefined) grid[gridX][gridY]++;
+    }
+    const vacancyThreshold = 1;
+    for (let i = 0; i < gridSize; i++) {
+        for (let j = 0; j < gridSize; j++) {
+            if (grid[i][j] <= vacancyThreshold) {
+                newVacancies.push({ id: \`v-\${i}-\${j}\`, x: (i + 0.5) * cellSize, y: (j + 0.5) * cellSize, radius: cellSize * 0.7 });
+            }
+        }
+    }
+    setVacancies(newVacancies);
+    runtime.logEvent(\`[Discovery Map] ✅ Map updated with \${mapData.length} sources and \${newVacancies.length} potential vacancies.\`);
+}, [mapData]);
 
 
 const handleInterpretVacancy = async (vacancy) => {
     setIsInterpreting(true);
     try {
-        const result = await runtime.tools.run('InterpretVacancy', { vacancy, mapData });
-        setLiveFeed(prev => [{ type: 'interpretation', data: result, id: Date.now() }, ...prev]);
+        // This is the full analysis pipeline from the 'Mass Hypothesis...' workflow.
+        // 1. Generate the core hypothesis
+        runtime.logEvent(\`[UI] Interpreting vacancy \${vacancy.id}...\`);
+        const interpretationResult = await runtime.tools.run('InterpretVacancy', { vacancy, mapData });
+        const { hypotheticalAbstract, neighbors } = interpretationResult;
+
+        // 2. Deconstruct hypothesis into a concrete experiment plan
+        runtime.logEvent(\`[UI] Deconstructing hypothesis into experiment plan...\`);
+        const planResult = await runtime.tools.run('Deconstruct Hypothesis to Experiment Plan', { hypotheticalAbstract });
+        const { experimentPlan } = planResult;
+        
+        // 3. Price the generated experiment plan
+        runtime.logEvent(\`[UI] Estimating cost for experiment plan...\`);
+        const costResult = await runtime.tools.run('Price Experiment Plan', { experimentPlan });
+        const { estimatedCost, costBreakdown } = costResult;
+
+        // 4. Assess organ-specific impact
+        runtime.logEvent(\`[UI] Assessing organ-specific impact...\`);
+        const organImpactResult = await runtime.tools.run('Assess Organ-Specific Aging Impact', { synergySummary: hypotheticalAbstract });
+        const { organImpacts } = organImpactResult;
+        
+        // 5. Create the full hypothesis object
+        const fullHypothesis = {
+            type: 'hypothesis', // Set the type for the feed
+            id: \`hypo-\${vacancy.id}\`, // Create a unique & STABLE ID
+            timestamp: Date.now(),
+            data: {
+                hypotheticalAbstract,
+                neighbors,
+                estimatedCost,
+                requiredAssays: experimentPlan.key_measurements,
+                experimentPlan,
+                costBreakdown,
+                organImpacts,
+                trialPriorityScore: 50, // Assign a default score
+            }
+        };
+
+        setLiveFeed(prev => {
+            const filteredFeed = prev.filter(item => item.id !== fullHypothesis.id);
+            const newFeed = [fullHypothesis, ...filteredFeed];
+            return newFeed.sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
+        });
+        runtime.logEvent(\`[UI] ✅ New hypothesis generated and analyzed. Est. Cost: $\${estimatedCost}\`);
+
     } catch (e) {
         runtime.logEvent(\`[Discovery Map] Error interpreting vacancy: \${e.message}\`);
     } finally {
@@ -154,8 +271,12 @@ const resetOrganoids = React.useCallback(() => {
 }, [runtime, userAgingVector]);
 
 React.useEffect(() => {
-    // This effect runs whenever new sources are added, triggering a re-evaluation of all synergies.
     const reScoreAllSynergies = async () => {
+        if (isInitialLoad.current) {
+            runtime.logEvent('[Re-evaluation] Skipping automatic re-scoring on initial load.');
+            return;
+        }
+
         const synergiesToRescore = liveFeed.filter(item => item.type === 'synergy').map(item => item.data);
         if (isSwarmRunning || isRescoring || synergiesToRescore.length === 0 || allSources.length === 0) {
             return;
@@ -164,6 +285,8 @@ React.useEffect(() => {
         setIsRescoring(true);
         runtime.logEvent('[Re-evaluation] Change detected in research data. Starting background re-scoring of all synergies...');
         
+        const updatedSynergies = new Map();
+
         for (const synergy of synergiesToRescore) {
             if (isSwarmRunning) {
                 runtime.logEvent('[Re-evaluation] Swarm started, aborting background re-scoring.');
@@ -176,23 +299,29 @@ React.useEffect(() => {
                 });
                 
                 if (scoringResult && scoringResult.updatedSynergy) {
-                    setLiveFeed(prevFeed => {
-                        const getComboKey = (s) => Array.isArray(s.combination) ? s.combination.map(c => c.name).sort().join('+') : 'invalid';
-                        const keyToFind = getComboKey(scoringResult.updatedSynergy);
-                        const index = prevFeed.findIndex(item => item.type === 'synergy' && getComboKey(item.data) === keyToFind);
-
-                        if (index !== -1) {
-                            const newFeed = [...prevFeed];
-                            newFeed[index] = { ...newFeed[index], data: scoringResult.updatedSynergy };
-                            return newFeed;
-                        }
-                        return prevFeed;
-                    });
+                    const getComboKey = (s) => Array.isArray(s.combination) ? s.combination.map(c => c.name).sort().join('+') : 'invalid';
+                    const key = getComboKey(scoringResult.updatedSynergy);
+                    updatedSynergies.set(key, scoringResult.updatedSynergy);
                 }
             } catch (error) {
                 const comboString = Array.isArray(synergy.combination) ? synergy.combination.map(c => c.name).join(' + ') : 'Unknown';
                 runtime.logEvent(\`[Re-evaluation] ⚠️ Failed to re-score synergy: \${comboString}. Error: \${error.message}\`);
             }
+        }
+        
+        if (updatedSynergies.size > 0) {
+            setLiveFeed(prevFeed => {
+                const getComboKey = (s) => Array.isArray(s.combination) ? s.combination.map(c => c.name).sort().join('+') : 'invalid';
+                return prevFeed.map(item => {
+                    if (item.type === 'synergy') {
+                        const key = getComboKey(item.data);
+                        if (updatedSynergies.has(key)) {
+                            return { ...item, data: updatedSynergies.get(key) };
+                        }
+                    }
+                    return item;
+                });
+            });
         }
         
         runtime.logEvent('[Re-evaluation] ✅ Background re-scoring complete.');
@@ -277,13 +406,20 @@ React.useEffect(() => {
 }, []);
 
 React.useEffect(() => {
-    if (!liveSwarmHistory || liveSwarmHistory.length === 0) return;
+    // If history is cleared (e.g., new task), reset the counter.
+    if (liveSwarmHistory.length < lastHistoryLength.current) {
+        lastHistoryLength.current = 0;
+    }
 
-    const newSources = liveSwarmHistory
+    const newHistoryItems = liveSwarmHistory.slice(lastHistoryLength.current);
+    if (!newHistoryItems || newHistoryItems.length === 0) return;
+
+    lastHistoryLength.current = liveSwarmHistory.length;
+
+    const allNewSources = newHistoryItems
         .filter(h => 
             h.tool?.name === 'RecordValidatedSource' && 
             h.executionResult?.validatedSource &&
-            // Filter out sources with 0 reliability, as they are typically 404s or invalid.
             h.executionResult.validatedSource.reliabilityScore > 0
         )
         .map(h => ({
@@ -291,39 +427,62 @@ React.useEffect(() => {
             id: h.executionResult.validatedSource.uri,
             type: 'source'
         }));
+    const newSources = Array.from(new Map(allNewSources.map(item => [item.id, item])).values());
 
-    const newSynergies = liveSwarmHistory
+
+    const allNewSynergies = newHistoryItems
         .filter(h => h.tool?.name === 'RecordSynergy' && h.executionResult?.synergy)
         .map(h => ({
             data: h.executionResult.synergy,
             id: (h.executionResult.synergy.combination.map(c => c.name).sort().join('+') + (h.executionResult.synergy.sourceUri || '')),
             type: 'synergy'
         }));
+    const newSynergies = Array.from(new Map(allNewSynergies.map(item => [item.id, item])).values());
+        
+    const allNewHypotheses = newHistoryItems
+        .filter(h => h.tool?.name === 'RecordHypothesis' && h.executionResult?.hypothesis)
+        .map(h => {
+            const neighborKey = (h.executionResult.hypothesis.neighbors || [])
+                .map(n => n.uri || n.id)
+                .filter(Boolean)
+                .sort()
+                .join('');
+            
+            return {
+                data: h.executionResult.hypothesis,
+                id: \`hypo-\${neighborKey || Date.now() + Math.random()}\`,
+                type: 'hypothesis'
+            };
+        });
+    const newHypotheses = Array.from(new Map(allNewHypotheses.map(item => [item.id, item])).values());
 
-    const newDossiers = liveSwarmHistory
+
+    const allNewDossiers = newHistoryItems
         .filter(h => h.tool?.name === 'RecordTrialDossier' && h.executionResult?.dossier)
         .map(h => ({
             data: h.executionResult.dossier,
             id: h.executionResult.dossier.combination.map(c => c.name).sort().join('+'),
             type: 'dossier'
         }));
+    const newDossiers = Array.from(new Map(allNewDossiers.map(item => [item.id, item])).values());
+
     
-    const newCritiques = liveSwarmHistory
+    const allNewCritiques = newHistoryItems
         .filter(h => h.tool?.name === 'RecordCritique' && h.executionResult?.critique)
         .map(h => ({
             data: h.executionResult.critique,
             id: h.executionResult.critique.combination.map(c => c.name).sort().join('+'),
             type: 'critique'
         }));
+    const newCritiques = Array.from(new Map(allNewCritiques.map(item => [item.id, item])).values());
+
 
     setAllSources(currentSources => {
         const newUniqueSources = newSources
-            .map(s => s)
             .filter(s => !currentSources.some(cs => cs.id === s.id));
         if (newUniqueSources.length > 0) {
-            const updatedSources = [...currentSources, ...newUniqueSources];
-            updateMapRealtime(updatedSources);
-            return updatedSources;
+            updateMapRealtime(newUniqueSources);
+            return [...currentSources, ...newUniqueSources];
         }
         return currentSources;
     });
@@ -336,9 +495,14 @@ React.useEffect(() => {
                 feedMap.set(source.id, { type: 'source', data: source, id: source.id, timestamp: Date.now() });
             }
         });
+        
+        newHypotheses.forEach(hypo => {
+            if (!feedMap.has(hypo.id)) {
+                feedMap.set(hypo.id, { ...hypo, timestamp: Date.now() });
+            }
+        });
 
         newSynergies.forEach(synergy => {
-            // Only add if it's not already a dossier
             const dossierKey = synergy.data.combination.map(c => c.name).sort().join('+');
             const existing = feedMap.get(synergy.id);
             const existingDossier = feedMap.get(dossierKey);
@@ -352,12 +516,19 @@ React.useEffect(() => {
         
         newDossiers.forEach(dossier => {
             const dossierKey = dossier.id;
-            const existingItem = feedMap.values().find(item => item.id.startsWith(dossierKey));
             
+            const synergiesToDelete = [];
+            for (const item of feedMap.values()) {
+                if (item.type === 'synergy' && item.id.startsWith(dossierKey)) {
+                    synergiesToDelete.push(item);
+                }
+            }
+
             let originalSynergy = {};
-            if (existingItem && existingItem.type === 'synergy') {
-                 originalSynergy = existingItem.data;
-                 feedMap.delete(existingItem.id); // remove all synergy versions
+            if (synergiesToDelete.length > 0) {
+                synergiesToDelete.sort((a, b) => (b.data.trialPriorityScore || 0) - (a.data.trialPriorityScore || 0));
+                originalSynergy = synergiesToDelete[0].data;
+                synergiesToDelete.forEach(item => feedMap.delete(item.id));
             }
             
             feedMap.set(dossier.id, { type: 'dossier', data: { ...dossier.data, synergyData: originalSynergy }, id: dossier.id, timestamp: Date.now() });
@@ -367,8 +538,14 @@ React.useEffect(() => {
             const dossierKey = critique.id;
             const existingDossier = feedMap.get(dossierKey);
             if (existingDossier && existingDossier.type === 'dossier') {
-                existingDossier.data.critique = critique.data;
-                feedMap.set(dossierKey, existingDossier);
+                const updatedDossier = {
+                    ...existingDossier,
+                    data: {
+                        ...existingDossier.data,
+                        critique: critique.data
+                    }
+                };
+                feedMap.set(dossierKey, updatedDossier);
             }
         });
         
@@ -390,14 +567,13 @@ const anyOrganoidAlive = React.useMemo(() => Object.values(organoids).some(o => 
 
 React.useEffect(() => {
     if (isSwarmRunning && eventLog && eventLog.length > 0) {
-        // Search backwards for the last progress update to ensure we don't miss it.
         let progressMatch = null;
         for (let i = eventLog.length - 1; i >= 0; i--) {
             const log = eventLog[i];
             const match = log.match(/\\\[Workflow\\] Step (\\d+)\\/(\\d+): (.*)/);
             if (match) {
                 progressMatch = match;
-                break; // Found the most recent progress update
+                break;
             }
         }
 
@@ -419,15 +595,30 @@ React.useEffect(() => {
     } else if (!isSwarmRunning) {
          taskStartTime.current = null;
          setProgressInfo({ step: 0, total: 0, message: '', eta: 0 });
+         setIsVentureRunning(false);
     }
 }, [eventLog, isSwarmRunning]);
 
 const handleStart = () => {
     if (taskPrompt.trim()) {
-        setLiveFeed([]);
-        setAllSources([]);
-        setMapData([]);
-        setVacancies([]);
+        const isNewObjective = liveFeed.length > 0 && dataContextPrompt !== taskPrompt;
+
+        if (isNewObjective) {
+            runtime.logEvent('[SYSTEM] New research objective detected. Resetting workspace.');
+            setLiveFeed([]);
+            setAllSources([]);
+            setMapData([]);
+            setVacancies([]);
+            setRankedHypotheses([]);
+            setFeedView('live');
+            setPcaModel(null);
+            setMapNormalization(null);
+        } else if (liveFeed.length > 0) {
+            runtime.logEvent('[SYSTEM] Continuing research with the same objective.');
+        }
+
+        setDataContextPrompt(taskPrompt);
+
         taskStartTime.current = Date.now();
         setProgressInfo({ step: 0, total: 4, message: 'Initiating workflow...', eta: 0 });
 
@@ -443,6 +634,39 @@ const handleStart = () => {
         startSwarmTask({ task: workflowTask, systemPrompt: null, allTools: runtime.tools.list() });
     }
 };
+
+const handleStartVentureAnalysis = async () => {
+    setIsVentureRunning(true);
+    setFeedView('live'); // Switch to live view to see progress
+    const workflowTask = {
+        isScripted: true,
+        script: [
+            {
+                name: 'Mass Hypothesis Generation and Ranking',
+                arguments: { mapData, vacancies }
+            }
+        ]
+    };
+    startSwarmTask({ task: workflowTask, systemPrompt: null, allTools: runtime.tools.list() });
+};
+
+React.useEffect(() => {
+    const rankHypotheses = async () => {
+        if (feedView === 'ranked' || (!isSwarmRunning && liveFeed.length > 0)) {
+            const itemsToRank = liveFeed.filter(item => item.type === 'synergy' || item.type === 'hypothesis');
+            if (itemsToRank.length > 0) {
+                try {
+                    const result = await runtime.tools.run('Prioritize Hypotheses by ROI', { hypotheses: itemsToRank });
+                    setRankedHypotheses(result.rankedHypotheses || []);
+                } catch (e) {
+                    runtime.logEvent(\`[UI] Failed to rank hypotheses: \${e.message}\`);
+                }
+            }
+        }
+    };
+    rankHypotheses();
+}, [feedView, isSwarmRunning, liveFeed]);
+
 
 const handleGenerateDossier = React.useCallback((synergy) => {
     if (isSwarmRunning) {
@@ -651,9 +875,12 @@ return (
                         <p className="text-xs text-slate-500 text-center pt-1">API keys are stored locally in your browser.</p>
                     }
                 </div>
-                <div className="mt-2 flex">
+                 <div className="mt-2 grid grid-cols-2 gap-2">
                     <button onClick={handleStart} disabled={isSwarmRunning || !taskPrompt.trim()} className="w-full bg-gradient-to-r from-amber-600 to-yellow-600 hover:from-amber-500 hover:to-yellow-500 text-white font-bold py-2 px-4 rounded-lg disabled:from-slate-700 disabled:to-slate-600 disabled:text-slate-400 disabled:cursor-not-allowed transition-all">
-                        {isSwarmRunning ? 'Working...' : 'Begin Research'}
+                        {isSwarmRunning && !isVentureRunning ? 'Working...' : 'Begin Research'}
+                    </button>
+                    <button onClick={handleStartVentureAnalysis} disabled={isSwarmRunning || mapData.length === 0} className="w-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold py-2 px-4 rounded-lg disabled:from-slate-700 disabled:to-slate-600 disabled:text-slate-400 disabled:cursor-not-allowed transition-all">
+                        {isVentureRunning ? 'Analyzing...' : 'Venture Analysis'}
                     </button>
                 </div>
                  <ProgressTracker progress={progressInfo} isRunning={isSwarmRunning} />
@@ -716,8 +943,8 @@ return (
                         The semantic map will be generated here once research begins.
                     </div>
                 )}
-                {mapData.map(({ source, x, y }, i) => (
-                    <div key={i} className="absolute w-2.5 h-2.5 bg-cyan-400 rounded-full -translate-x-1/2 -translate-y-1/2 transition-all duration-300 hover:scale-150 group" style={{ left: \`\${(x/500)*100}%\`, top: \`\${(y/500)*100}%\` }}>
+                {mapData.map(({ source, x, y, isNew }, i) => (
+                    <div key={source.id || i} className={\`absolute w-2.5 h-2.5 bg-cyan-400 rounded-full -translate-x-1/2 -translate-y-1/2 transition-all duration-300 hover:scale-150 group \${isNew ? 'animate-fade-in-scale' : ''}\`} style={{ left: \`\${(x/500)*100}%\`, top: \`\${(y/500)*100}%\` }}>
                          <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 w-48 bg-slate-800 text-white text-xs rounded p-2 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-20 border border-slate-600 shadow-lg">
                             {source.title}
                         </div>
@@ -755,45 +982,55 @@ return (
         {/* Right Column: Live Feed */}
         <div className="w-[34rem] h-full flex flex-col p-4 gap-4 flex-shrink-0">
              <div className="flex justify-between items-center">
-                <h2 className="text-2xl font-bold text-amber-300 drop-shadow-[0_0_8px_rgba(252,211,77,0.5)]">Live Results Feed</h2>
-                 {isRescoring && <div className="flex items-center gap-2 text-xs text-cyan-300"><svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>Re-scoring...</div>}
+                <h2 className="text-2xl font-bold text-amber-300 drop-shadow-[0_0_8px_rgba(252,211,77,0.5)]">Results Feed</h2>
+                <div className="flex items-center gap-2">
+                    <button onClick={() => setFeedView('live')} className={\`px-3 py-1 text-sm rounded-md \${feedView === 'live' ? 'bg-slate-700 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700/50'}\`}>Live</button>
+                    <button onClick={() => setFeedView('ranked')} className={\`px-3 py-1 text-sm rounded-md \${feedView === 'ranked' ? 'bg-slate-700 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700/50'}\`}>Top 100</button>
+                </div>
              </div>
-            <p className="text-sm text-slate-400 -mt-3">All sources, synergies, and proposals stream here.</p>
-            <div className="flex-grow bg-black/20 rounded-lg overflow-y-auto p-3 space-y-3 border border-slate-800">
-                {isSwarmRunning && liveFeed.length === 0 && <LoadingIndicator message={progressInfo.message} />}
-                {!isSwarmRunning && liveFeed.length === 0 && <p className="text-slate-500 p-4 text-center">Agent is idle. Define an objective and begin research.</p>}
-                
-                {liveFeed.map(item => {
-                    switch (item.type) {
-                        case 'source':
-                            return <SourceCard key={item.id} source={item.data} />;
-                        case 'synergy':
-                            const synergyKey = item.data.combination.map(c => c.name).sort().join(' + ');
-                            const isGenerating = generatingDossiers.has(synergyKey);
-                            return <SynergyCard 
-                                key={item.id} 
-                                synergy={item.data} 
-                                actions={(
-                                    <button
-                                        onClick={() => handleGenerateDossier(item.data)}
-                                        disabled={isSwarmRunning || isGenerating}
-                                        title={isSwarmRunning ? "Cannot generate dossier while a research task is running." : isGenerating ? "This dossier is already being generated." : "Generate a full, investment-ready dossier for this proposal."}
-                                        className="font-bold py-1.5 px-3 rounded-lg self-start transition-colors bg-amber-600 hover:bg-amber-500 disabled:bg-slate-600 disabled:cursor-not-allowed"
-                                    >
-                                        {isGenerating ? 'Generating...' : 'Generate Full Dossier'}
-                                    </button>
-                                )}
-                                applySynergy={applySynergy}
-                                anyOrganoidAlive={anyOrganoidAlive}
-                             />;
-                        case 'dossier':
-                             return <DossierCard key={item.id} dossier={item.data} synergy={item.data.synergyData || {}} />;
-                        case 'interpretation':
-                            return <InterpretationCard key={item.id} interpretation={item.data} />;
-                        default:
-                            return null;
-                    }
-                })}
+             <p className="text-sm text-slate-400 -mt-3">{feedView === 'live' ? 'All sources, synergies, and proposals stream here.' : 'Top 100 testable hypotheses, ranked by ROI.'}</p>
+            <div className="flex-grow bg-black/20 rounded-lg overflow-y-auto border border-slate-800">
+                 {feedView === 'ranked' ? (
+                    <RankedHypothesesView rankedItems={rankedHypotheses} />
+                 ) : (
+                    <div className="p-3 space-y-3">
+                        {isSwarmRunning && liveFeed.length === 0 && <LoadingIndicator message={progressInfo.message} />}
+                        {!isSwarmRunning && liveFeed.length === 0 && <p className="text-slate-500 p-4 text-center">Agent is idle. Define an objective and begin research.</p>}
+                        
+                        {liveFeed.map(item => {
+                            switch (item.type) {
+                                case 'source':
+                                    return <SourceCard key={item.id} source={item.data} />;
+                                case 'synergy':
+                                    const synergyKey = item.data.combination.map(c => c.name).sort().join(' + ');
+                                    const isGenerating = generatingDossiers.has(synergyKey);
+                                    return <SynergyCard 
+                                        key={item.id} 
+                                        synergy={item.data} 
+                                        actions={(
+                                            <button
+                                                onClick={() => handleGenerateDossier(item.data)}
+                                                disabled={isSwarmRunning || isGenerating}
+                                                title={isSwarmRunning ? "Cannot generate dossier while a research task is running." : isGenerating ? "This dossier is already being generated." : "Generate a full, investment-ready dossier for this proposal."}
+                                                className="font-bold py-1.5 px-3 rounded-lg self-start transition-colors bg-amber-600 hover:bg-amber-500 disabled:bg-slate-600 disabled:cursor-not-allowed"
+                                            >
+                                                {isGenerating ? 'Generating...' : 'Generate Full Dossier'}
+                                            </button>
+                                        )}
+                                        applySynergy={applySynergy}
+                                        anyOrganoidAlive={anyOrganoidAlive}
+                                     />;
+                                case 'dossier':
+                                     return <DossierCard key={item.id} dossier={item.data} synergy={item.data.synergyData || {}} />;
+                                case 'interpretation':
+                                case 'hypothesis':
+                                    return <HypothesisCard key={item.id} hypothesis={item.data} />;
+                                default:
+                                    return null;
+                            }
+                        })}
+                    </div>
+                )}
             </div>
         </div>
     </div>

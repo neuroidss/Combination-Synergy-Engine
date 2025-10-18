@@ -1,6 +1,227 @@
+
+
 import type { ToolCreatorPayload } from '../types';
 
 export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
+    {
+        name: "UpdatePricingModel",
+        description: "A meta-workflow that updates the 'FindMarketPriceForLabItem' tool. It searches for new lab supply vendors, then rewrites the tool's code to include these new vendors as fallback search options, making the price search more robust.",
+        category: "Automation",
+        executionEnvironment: "Client",
+        purpose: "To allow the system to adapt its own price-finding logic as online vendors change, ensuring long-term viability of dynamic cost estimation.",
+        parameters: [],
+        implementationCode: `
+            runtime.logEvent('[Pricing Model Updater] 🚀 Starting self-update of price-finding logic...');
+    
+            // 1. Search for new vendors
+            const searchResults = await runtime.search.web("top lab chemical supply companies online store", 3);
+            const newVendorsText = searchResults.map(r => r.snippet).join(' ');
+    
+            // 2. Ask AI to extract domains
+            const extractionPrompt = \`From the text below, extract a list of company domain names (like 'thermofisher.com', 'vwr.com'). Respond with a JSON object: {"vendors": ["domain1.com", "domain2.com"]}\\n\\nTEXT: \${newVendorsText}\`;
+            const aiResponse = await runtime.ai.generateText(extractionPrompt, "You are a data extraction bot.");
+            const jsonMatch = aiResponse.match(/\\{[\\s\\S]*\\}/);
+            const newVendors = jsonMatch ? JSON.parse(jsonMatch[0]).vendors : [];
+    
+            if (newVendors.length === 0) {
+                runtime.logEvent('[Pricing Model Updater] No new vendors found. Update aborted.');
+                return { success: false, message: "No new vendors found." };
+            }
+            
+            runtime.logEvent(\`[Pricing Model Updater] Found potential new vendors: \${newVendors.join(', ')}. Synthesizing new tool code...\`);
+    
+            // 3. Get old code and create a prompt to update it
+            const oldTool = runtime.tools.list().find(t => t.name === 'FindMarketPriceForLabItem');
+            if (!oldTool) throw new Error("Original 'FindMarketPriceForLabItem' tool not found.");
+    
+            const systemPrompt = "You are an expert AI system architect. Rewrite the JavaScript implementationCode for a tool based on new requirements. Then, call the 'Tool Creator' to save the updated tool. Respond ONLY with the tool call.";
+            const creationPrompt = \`## TASK ##
+    Rewrite the implementationCode for the 'FindMarketPriceForLabItem' tool.
+    The original code only searches on 'sigmaaldrich.com'.
+    The new code must be more robust. It should try searching for the item on these vendor sites in order: \${JSON.stringify(['sigmaaldrich.com', ...newVendors])}. If the first one fails, it should try the next.
+    
+    ## OLD CODE ##
+    \`\`\`javascript
+    \${oldTool.implementationCode}
+    \`\`\`
+    
+    ## YOUR INSTRUCTIONS ##
+    Generate the full, new implementationCode. Then call the 'Tool Creator' tool to overwrite the old tool with your new code.\`;
+    
+            const toolCreatorTool = runtime.tools.list().find(t => t.name === 'Tool Creator');
+            const updateResponse = await runtime.ai.processRequest(creationPrompt, systemPrompt, [toolCreatorTool]);
+            const toolCall = updateResponse?.toolCalls?.[0];
+    
+            if (toolCall && toolCall.name === 'Tool Creator') {
+                const finalArgs = {
+                    ...toolCall.arguments,
+                    name: 'FindMarketPriceForLabItem', // Force overwrite of the correct tool
+                };
+                await runtime.tools.run('Tool Creator', finalArgs);
+                runtime.logEvent('[Pricing Model Updater] ✅ Successfully updated and replaced the "FindMarketPriceForLabItem" tool!');
+                return { success: true, message: "Price-finding model updated." };
+            } else {
+                throw new Error("AI failed to generate the updated tool code.");
+            }
+        `
+    },
+    {
+        name: "UpdateScoringModels",
+        description: "A meta-workflow that updates the system's own scientific and financial scoring models. It searches for the latest scientific reviews and market data, synthesizes new scoring logic, and uses the 'Tool Creator' to overwrite the existing scoring tools with updated versions.",
+        category: "Automation",
+        executionEnvironment: "Client",
+        purpose: "To ensure the agent's decision-making for prioritizing research stays current with the evolving scientific consensus and market conditions, enabling the system to self-improve.",
+        parameters: [], 
+        implementationCode: `
+            runtime.logEvent('[Model Updater] 🚀 Starting self-update of scoring models...');
+    
+            // 1. Gather current data for the scientific model
+            const scientificQueries = [
+                "longevity interventions clinical trial risk factors review",
+                "synergistic drug combinations mechanism of action review 2024 2025",
+                "hallmarks of aging most promising therapeutic targets"
+            ];
+            const searchResult = await runtime.tools.run('Federated Scientific Search', { query: scientificQueries.join('; '), maxResultsPerSource: 3 });
+            const sources = searchResult.searchResults || [];
+            
+            if (sources.length < 3) {
+                throw new Error("Could not find enough recent review articles to update the scientific model.");
+            }
+    
+            runtime.logEvent(\`[Model Updater] Found \${sources.length} sources for model synthesis. Reading content...\`);
+    
+            let contextText = "";
+            for (const source of sources) {
+                try {
+                    const enriched = await runtime.tools.run('Find and Validate Single Source', { searchResult: source, researchObjective: "Update scientific scoring models for longevity interventions" });
+                    if (enriched.validatedSource.textContent) {
+                        contextText += \`\\n\\n--- SOURCE: \${enriched.validatedSource.title} ---\\n\${enriched.validatedSource.summary}\`;
+                    }
+                } catch (e) {
+                    runtime.logEvent(\`[Model Updater] WARN: Failed to read source: \${e.message}\`);
+                }
+            }
+    
+            if (contextText.length < 500) {
+                throw new Error("Not enough content from sources to build a new model.");
+            }
+    
+            // 2. Synthesize and overwrite the scientific scoring tool
+            runtime.logEvent('[Model Updater] 🧠 Synthesizing new scientific scoring logic...');
+    
+            const oldScoringTool = runtime.tools.list().find(t => t.name === 'Score Single Synergy');
+            if (!oldScoringTool) throw new Error("Could not find the original 'Score Single Synergy' tool to update.");
+    
+            const systemPrompt = \`You are an expert bio-gerontologist and system architect. Your task is to update an AI agent's internal scoring tool based on the latest scientific literature.
+    - You will be given the OLD source code of the tool and NEW scientific context.
+    - You must generate the FULL, NEW source code for the tool.
+    - The new logic should reflect the insights from the new context (e.g., if new risks are mentioned, lower the scores; if a new pathway is promising, increase the scores).
+    - Finally, you MUST call the 'Tool Creator' tool to overwrite the old tool with your new implementation.\`;
+    
+            const creationPrompt = \`## LATEST SCIENTIFIC CONTEXT ##
+    \${contextText.substring(0, 15000)}
+    
+    ## OLD TOOL SOURCE CODE (Score Single Synergy) ##
+    // Purpose: \${oldScoringTool.purpose}
+    const OLD_CODE = \`\${oldScoringTool.implementationCode}\`;
+    
+    ## YOUR TASK ##
+    Based on the LATEST CONTEXT, rewrite the implementationCode for the 'Score Single Synergy' tool. 
+    - Keep the function signature and return format the same.
+    - Modify the internal logic, especially inside the AI prompts, to reflect the new scientific understanding.
+    - Then, call the 'Tool Creator' tool with the new code to save your changes.\`;
+    
+            try {
+                const toolCreatorTool = runtime.tools.list().find(t => t.name === 'Tool Creator');
+                const aiResponse = await runtime.ai.processRequest(creationPrompt, systemPrompt, [toolCreatorTool]);
+                const toolCall = aiResponse?.toolCalls?.[0];
+    
+                if (toolCall && toolCall.name === 'Tool Creator') {
+                    // Ensure the AI doesn't change critical fields
+                    const finalArgs = {
+                        ...toolCall.arguments,
+                        name: 'Score Single Synergy', // Prevent AI from renaming the tool
+                        category: 'Functional',
+                        executionEnvironment: 'Client',
+                    };
+                    await runtime.tools.run('Tool Creator', finalArgs);
+                    runtime.logEvent('[Model Updater] ✅ Successfully updated and replaced the "Score Single Synergy" tool.');
+                } else {
+                     throw new Error("AI failed to generate a call to 'Tool Creator'.");
+                }
+            } catch (e) {
+                 runtime.logEvent(\`[Model Updater] ❌ Failed to update scientific model: \${e.message}\`);
+            }
+            
+            // (Optional) A similar logic block could be added here to update the 'Price Experiment Plan' tool
+    
+            return { success: true, message: "Scoring model update process completed." };
+        `
+    },
+    {
+        name: 'Mass Hypothesis Generation and Ranking',
+        description: 'A venture-focused workflow that iterates through all research vacancies, generates a novel hypothesis for each, estimates its validation cost, and records it.',
+        category: 'Automation',
+        executionEnvironment: 'Client',
+        purpose: 'To transform the research map into a high-throughput engine for creating a portfolio of cost-analyzed, testable, and investment-ready R&D projects.',
+        parameters: [
+            { name: 'mapData', type: 'array', description: 'The full map data from the UI, containing all sources with coordinates and embeddings.', required: true },
+            { name: 'vacancies', type: 'array', description: 'The full list of vacancy objects from the UI.', required: true },
+        ],
+        implementationCode: `
+            const { mapData, vacancies } = args;
+
+            if (!vacancies || vacancies.length === 0) {
+                runtime.logEvent('[Venture Workflow] No vacancies found on the map. Nothing to generate.');
+                return { success: true, message: "No vacancies to process." };
+            }
+
+            runtime.logEvent(\`[Venture Workflow] Starting mass hypothesis generation for \${vacancies.length} vacancies...\`);
+            let generatedCount = 0;
+
+            for (const [index, vacancy] of vacancies.entries()) {
+                runtime.logEvent(\`[Venture Workflow] -> Processing vacancy \${index + 1}/\${vacancies.length}...\`);
+                try {
+                    // 1. Generate the core hypothesis
+                    const interpretationResult = await runtime.tools.run('InterpretVacancy', { vacancy, mapData });
+                    const { hypotheticalAbstract, neighbors } = interpretationResult;
+
+                    // 2. Deconstruct hypothesis into a concrete experiment plan
+                    const planResult = await runtime.tools.run('Deconstruct Hypothesis to Experiment Plan', { hypotheticalAbstract });
+                    const { experimentPlan } = planResult;
+                    
+                    // 3. Price the generated experiment plan
+                    const costResult = await runtime.tools.run('Price Experiment Plan', { experimentPlan });
+                    const { estimatedCost, costBreakdown } = costResult;
+
+                    // 4. Assess organ-specific impact
+                    const organImpactResult = await runtime.tools.run('Assess Organ-Specific Aging Impact', { synergySummary: hypotheticalAbstract });
+                    const { organImpacts } = organImpactResult;
+                    
+                    // 5. Record the fully-formed venture hypothesis with detailed cost data
+                    await runtime.tools.run('RecordHypothesis', {
+                        hypotheticalAbstract,
+                        neighbors,
+                        estimatedCost,
+                        requiredAssays: experimentPlan.key_measurements,
+                        experimentPlan,
+                        costBreakdown,
+                        organImpacts,
+                        trialPriorityScore: 50, // Assign a default score for prioritization
+                    });
+
+                    generatedCount++;
+                } catch (e) {
+                    runtime.logEvent(\`[Venture Workflow] -> ❌ Failed to process vacancy \${index + 1}: \${e.message}\`);
+                }
+                await new Promise(resolve => setTimeout(resolve, 500)); // Rate limit
+            }
+
+            const finalMessage = \`Venture workflow complete. Successfully generated and analyzed \${generatedCount} of \${vacancies.length} hypotheses.\`;
+            runtime.logEvent(\`[Venture Workflow] ✅ \${finalMessage}\`);
+            return { success: true, message: finalMessage };
+        `
+    },
     {
         name: 'AdaptFetchStrategy',
         description: 'A self-healing workflow that activates when web fetching fails. It discovers new CORS proxy builders using an AI, then updates the runtime with these new strategies to overcome blockades.',
@@ -44,13 +265,13 @@ export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
         runtime.logEvent('[Workflow] Starting full research and proposal workflow...');
 
         // Step 1: Refine Search Queries
-        runtime.logEvent('[Workflow] Step 1/4: Refining search queries...');
+        runtime.logEvent('[Workflow] Step 1/5: Refining search queries...');
         const refineResult = await runtime.tools.run('Refine Search Queries', { researchObjective });
         const refinedQueryString = refineResult.queries.join('; ');
         runtime.logEvent(\`[Workflow] Refined queries: \${refinedQueryString}\`);
 
         // Step 2: Deep Federated Search
-        runtime.logEvent('[Workflow] Step 2/4: Performing deep search on scientific literature...');
+        runtime.logEvent('[Workflow] Step 2/5: Performing deep search on scientific literature...');
         let proxyUrl = null;
         if (runtime.isServerConnected()) {
             try {
@@ -75,15 +296,16 @@ export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
             }
             runtime.logEvent('[Workflow] ✅ Diagnostic retry succeeded.');
         }
-        runtime.logEvent(\`[Workflow] Found \${initialSearchResults.length} potential sources. Beginning validation...\`);
-
-        // Step 3: ITERATIVE VALIDATION with SELF-HEALING
-        runtime.logEvent(\`[Workflow] Step 3/4: Validating \${initialSearchResults.length} sources individually...\`);
+        
+        // Step 3: ITERATIVE VALIDATION with SELF-HEALING & OPPORTUNISTIC GENERATION
+        runtime.logEvent(\`[Workflow] Step 3/5: Validating \${initialSearchResults.length} sources individually...\`);
         
         let sourcesToProcess = [...initialSearchResults];
-        let validatedSources = [];
-        let failedSources = [];
+        const validatedSources = [];
+        const failedSources = [];
         let adaptationAttempted = false;
+        let opportunisticGenerationTriggered = false;
+        const INITIAL_MAP_THRESHOLD = 10;
 
         while (sourcesToProcess.length > 0) {
             let currentIterationFailures = [];
@@ -91,15 +313,31 @@ export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
             for (const [index, source] of sourcesToProcess.entries()) {
                 runtime.logEvent(\`[Workflow] -> Processing source \${index + 1}/\${sourcesToProcess.length}: "\${source.title.substring(0, 40)}..."\`);
                 try {
-                    const validationResult = await runtime.tools.run('Find and Validate Single Source', {
-                        searchResult: source, researchObjective, proxyUrl
-                    });
-                    validatedSources.push(validationResult.validatedSource);
+                    const validationResult = await runtime.tools.run('Find and Validate Single Source', { searchResult: source, researchObjective, proxyUrl });
+                    if (validationResult.validatedSource && validationResult.validatedSource.reliabilityScore > 0.1) {
+                        validatedSources.push(validationResult.validatedSource);
+
+                        // --- OPPORTUNISTIC HYPOTHESIS GENERATION TRIGGER ---
+                        if (!opportunisticGenerationTriggered && validatedSources.length >= INITIAL_MAP_THRESHOLD) {
+                            opportunisticGenerationTriggered = true;
+                            runtime.logEvent(\`[Workflow] 🚀 Reached initial map threshold (\${INITIAL_MAP_THRESHOLD} sources). Starting opportunistic hypothesis generation in the background...\`);
+                            // Fire-and-forget this task. We don't await it so the main validation loop can continue.
+                            runtime.tools.run('Generate Hypotheses for Top Vacancies', { 
+                                researchObjective, 
+                                validatedSources: [...validatedSources] // Pass a snapshot of current sources
+                            }).catch(e => {
+                                runtime.logEvent(\`[Workflow] ⚠️ Opportunistic generation failed: \${e.message}\`);
+                            });
+                        }
+
+                    } else {
+                        throw new Error(\`Source had low reliability (\${validationResult.validatedSource.reliabilityScore}) or was invalid.\`);
+                    }
                 } catch (e) {
                     runtime.logEvent(\`[Workflow] -> ❌ Validation failed for source: \${e.message}\`);
                     currentIterationFailures.push(source);
                 }
-                await new Promise(resolve => setTimeout(resolve, 350)); // Rate limit
+                await new Promise(resolve => setTimeout(resolve, 350));
             }
 
             const failureRate = sourcesToProcess.length > 0 ? currentIterationFailures.length / sourcesToProcess.length : 0;
@@ -109,7 +347,7 @@ export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
                 adaptationAttempted = true;
                 await runtime.tools.run('AdaptFetchStrategy', {});
                 runtime.logEvent('[Workflow] Retrying failed sources with new strategy...');
-                sourcesToProcess = currentIterationFailures; // Set up the next loop with only the failed sources
+                sourcesToProcess = currentIterationFailures;
             } else {
                 failedSources.push(...currentIterationFailures);
                 sourcesToProcess = []; // Exit the loop
@@ -119,111 +357,134 @@ export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
         if (failedSources.length > 0) {
             runtime.logEvent(\`[Workflow] Validation complete. \${failedSources.length} sources could not be processed.\`);
         }
-        runtime.logEvent(\`[Workflow] Processing \${validatedSources.length} successfully validated sources...\`);
+        if (validatedSources.length === 0) {
+            runtime.logEvent('[Workflow] No reliable sources could be validated. Halting workflow.');
+            return { success: true, message: "No reliable sources found." };
+        }
+        runtime.logEvent(\`[Workflow] Successfully validated \${validatedSources.length} sources. Proceeding to analysis...\`);
         
-        let allSynergies = [];
-        let metaAnalyses = [];
+        // Step 4: Analysis of Validated Sources
+        runtime.logEvent(\`[Workflow] Step 4/5: Analyzing \${validatedSources.length} sources for synergies...\`);
+        
+        const classificationResult = await runtime.tools.run('Identify Meta-Analyses', { validatedSources });
+        const metaAnalyses = classificationResult.metaAnalyses || [];
+        const primaryStudies = classificationResult.primaryStudies || [];
 
-        const gameParamsTool = runtime.tools.list().find(t => t.name === 'RecordSynergyGameParameters');
-        if (!gameParamsTool) throw new Error("Core tool 'RecordSynergyGameParameters' not found.");
-
-        for (const [index, validatedSource] of validatedSources.entries()) {
-            runtime.logEvent(\`[Workflow] Analyzing source \${index + 1}/\${validatedSources.length}: "\${validatedSource.title.substring(0, 50)}..."\`);
-            
-            if (validatedSource.reliabilityScore < 0.6) {
-                runtime.logEvent(\`[Workflow] ...source skipped due to low reliability score (\${(validatedSource.reliabilityScore * 100).toFixed(0)}%).\`);
+        for (const [index, study] of primaryStudies.entries()) {
+             if (study.reliabilityScore < 0.6) {
+                runtime.logEvent(\`[Workflow] ...skipping source \${index+1} due to low reliability score (\${(study.reliabilityScore * 100).toFixed(0)}%).\`);
                 continue;
             }
-
-            const classificationResult = await runtime.tools.run('Identify Meta-Analyses', { validatedSources: [validatedSource] });
-            if (classificationResult.metaAnalyses && classificationResult.metaAnalyses.length > 0) {
-                metaAnalyses.push(validatedSource);
-            }
-            
-            const synergyAnalysisResult = await runtime.tools.run('Analyze Single Source for Synergies', {
-                sourceToAnalyze: validatedSource, researchObjective, metaAnalyses
-            });
-            const newSynergies = synergyAnalysisResult.synergies || [];
-
-            if (newSynergies.length > 0) {
-                 allSynergies.push(...newSynergies);
-                 for (const synergy of newSynergies) {
-                    const paramsPrompt = \`Based on the synergy: \${JSON.stringify(synergy)}, call the 'RecordSynergyGameParameters' tool with appropriate numerical values. The 'synergyCombination' parameter must be an array of strings containing only the intervention names.\`;
-                    const systemInstruction = "You are an expert system that translates scientific data into simulation parameters by calling the provided tool. Respond only with a tool call.";
-                    try {
-                        const aiResponse = await runtime.ai.processRequest(paramsPrompt, systemInstruction, [gameParamsTool]);
-                        const toolCall = aiResponse?.toolCalls?.[0];
-                        if (toolCall && toolCall.name === 'RecordSynergyGameParameters') {
-                            toolCall.arguments.synergyCombination = synergy.combination.map(c => c.name);
-                            await runtime.tools.run(toolCall.name, toolCall.arguments);
-                        }
-                    } catch(e) { 
-                        runtime.logEvent(\`[Workflow] WARN: Failed to generate game parameters for \${synergy.combination.map(c => c.name).join(' + ')}. Error: \${e.message}\`);
-                    }
-                 }
+            runtime.logEvent(\`[Workflow] ...analyzing study \${index + 1}/\${primaryStudies.length}: "\${study.title.substring(0, 50)}..."\`);
+            try {
+                await runtime.tools.run('Analyze Single Source for Synergies', { sourceToAnalyze: study, researchObjective, metaAnalyses });
+            } catch (e) {
+                runtime.logEvent(\`[Workflow] ...❌ ERROR analyzing study \${index + 1}: \${e.message}\`);
             }
              await new Promise(resolve => setTimeout(resolve, 500));
         }
 
-        runtime.logEvent('[Workflow] Step 3.5: Building semantic space for de novo hypothesis generation...');
-        if (validatedSources.length > 0) {
-            try {
-                const chunkingResult = await runtime.tools.run('Chunk and Embed Scientific Articles', { validatedSources });
-                const vectorDB = chunkingResult.vectorDB;
-                
-                if (vectorDB && vectorDB.length > 0) {
-                    runtime.logEvent(\`[Workflow] ...semantic space created with \${vectorDB.length} chunks. Generating conceptual queries...\`);
-                    const conceptualQueriesResult = await runtime.tools.run('Generate Conceptual Queries from Objective', { researchObjective, validatedSources: validatedSources });
-                    const conceptualQueries = conceptualQueriesResult.conceptual_queries;
+        // Step 5: De Novo Hypothesis Generation & Finalizing
+        runtime.logEvent('[Workflow] Step 5/5: Building semantic space and finalizing...');
+        try {
+            const chunkingResult = await runtime.tools.run('Chunk and Embed Scientific Articles', { validatedSources });
+            const vectorDB = chunkingResult.vectorDB;
+            
+            if (vectorDB && vectorDB.length > 0) {
+                runtime.logEvent(\`[Workflow] ...semantic space created with \${vectorDB.length} chunks. Generating conceptual queries...\`);
+                const conceptualQueriesResult = await runtime.tools.run('Generate Conceptual Queries from Objective', { researchObjective, validatedSources });
+                const conceptualQueries = conceptualQueriesResult.conceptual_queries;
 
-                    if (conceptualQueries && conceptualQueries.length > 0) {
-                        for (const query of conceptualQueries) {
-                            runtime.logEvent(\`[Workflow] ...exploring concept: "\${query.substring(0, 80)}..."\`);
-                            const hypothesisResult = await runtime.tools.run('Hypothesis Generator via Conceptual Search', { 
-                                conceptualQuery: query, 
-                                vectorDB: vectorDB 
-                            });
-                            
-                            const newHypothesis = hypothesisResult.synergy;
-                            if (newHypothesis) {
-                                runtime.logEvent(\`[Workflow] ...scoring de novo hypothesis: \${newHypothesis.combination.map(c=>c.name).join(' + ')}\`);
-                                const scoringResult = await runtime.tools.run('Score Single Synergy', {
-                                    synergyToScore: newHypothesis,
-                                    backgroundSources: validatedSources
-                                });
-
-                                if (scoringResult.updatedSynergy) {
-                                     await runtime.tools.run('RecordSynergy', scoringResult.updatedSynergy);
-
-                                     runtime.logEvent(\`[Workflow] ...generating game parameters for de novo hypothesis.\`);
-                                     const paramsPrompt = \`Based on the synergy: \${JSON.stringify(scoringResult.updatedSynergy)}, call the 'RecordSynergyGameParameters' tool with appropriate numerical values. The 'synergyCombination' parameter must be an array of strings containing only the intervention names.\`;
-                                     const systemInstruction = "You are an expert system that translates scientific data into simulation parameters by calling the provided tool. Respond only with a tool call.";
-                                     try {
-                                         const aiResponse = await runtime.ai.processRequest(paramsPrompt, systemInstruction, [gameParamsTool]);
-                                         const toolCall = aiResponse?.toolCalls?.[0];
-                                         if (toolCall && toolCall.name === 'RecordSynergyGameParameters') {
-                                             toolCall.arguments.synergyCombination = scoringResult.updatedSynergy.combination.map(c => c.name);
-                                             await runtime.tools.run(toolCall.name, toolCall.arguments);
-                                         }
-                                     } catch(e) {
-                                         runtime.logEvent(\`[Workflow] WARN: Failed to generate game parameters for de novo hypothesis. Error: \${e.message}\`);
-                                     }
-                                }
-                            }
-                            await new Promise(resolve => setTimeout(resolve, 500));
-                        }
+                if (conceptualQueries && conceptualQueries.length > 0) {
+                    for (const query of conceptualQueries) {
+                        runtime.logEvent(\`[Workflow] ...exploring concept: "\${query.substring(0, 80)}..."\`);
+                        await runtime.tools.run('Hypothesis Generator via Conceptual Search', { conceptualQuery: query, vectorDB });
+                        await new Promise(resolve => setTimeout(resolve, 500));
                     }
                 }
-            } catch (e) {
-                runtime.logEvent(\`[Workflow] WARN: De novo hypothesis generation step failed. Error: \${e.message}\`);
             }
+        } catch (e) {
+            runtime.logEvent(\`[Workflow] WARN: De novo hypothesis generation step failed. Error: \${e.message}\`);
         }
 
-        runtime.logEvent('[Workflow] Step 4/4: Finalizing...');
-        const finalSummary = \`Workflow completed. Processed \${initialSearchResults.length} potential articles, validating \${validatedSources.length}. Identified \${allSynergies.length} potential synergies.\`;
+        const finalSummary = \`Workflow completed. Processed \${initialSearchResults.length} potential articles, validating \${validatedSources.length}.\`;
         runtime.logEvent(\`[Workflow] ✅ \${finalSummary}\`);
         return { success: true, message: "Workflow finished successfully.", summary: finalSummary };
     `
+    },
+    {
+        name: 'Generate Hypotheses for Top Vacancies',
+        description: 'An internal workflow to opportunistically generate and analyze hypotheses for the most promising vacancies on the map.',
+        category: 'Automation',
+        executionEnvironment: 'Client',
+        purpose: 'To provide early, high-value results during a long research task by focusing on personalized vacancies as soon as enough data is available.',
+        parameters: [
+            { name: 'researchObjective', type: 'string', description: 'The original research objective.', required: true },
+            { name: 'validatedSources', type: 'array', description: 'The current list of validated sources to build the map from.', required: true },
+        ],
+        implementationCode: `
+            const { researchObjective, validatedSources } = args;
+
+            // 1. Build a temporary map from the current sources
+            const embedResult = await runtime.tools.run('Embed All Sources', { sources: validatedSources });
+            const mapResult = await runtime.tools.run('Generate 2D Map Coordinates', { embeddedSources: embedResult.embeddedSources });
+            const mapData = mapResult.mapData;
+
+            if (!mapData || mapData.length === 0) {
+                runtime.logEvent('[Opportunistic] Could not generate a map from the provided sources. Aborting.');
+                return;
+            }
+
+            // 2. Identify vacancies on this temporary map
+            const tempVacancies = [];
+            const mapSize = 500;
+            const gridSize = 20;
+            const cellSize = mapSize / gridSize;
+            const grid = Array(gridSize).fill(0).map(() => Array(gridSize).fill(0));
+            for (const point of mapData) {
+                const gridX = Math.floor(point.x / cellSize);
+                const gridY = Math.floor(point.y / cellSize);
+                if (grid[gridX] && grid[gridX][gridY] !== undefined) grid[gridX][gridY]++;
+            }
+            for (let i = 0; i < gridSize; i++) {
+                for (let j = 0; j < gridSize; j++) {
+                    if (grid[i][j] <= 1) { // Using threshold 1 for early map
+                        tempVacancies.push({ id: \`v-\${i}-\${j}\`, x: (i + 0.5) * cellSize, y: (j + 0.5) * cellSize, radius: cellSize * 0.7 });
+                    }
+                }
+            }
+            
+            // 3. Find the most promising vacancies (e.g., personalized)
+            // Note: This simplified version just takes the first few. A real implementation would call personalization tools.
+            const topVacancies = tempVacancies.slice(0, 3); // Generate for top 3 found vacancies
+            
+            runtime.logEvent(\`[Opportunistic] Found \${topVacancies.length} promising vacancies to analyze...\`);
+
+            // 4. Run the full analysis pipeline for each top vacancy
+            for (const vacancy of topVacancies) {
+                 try {
+                    const interpretationResult = await runtime.tools.run('InterpretVacancy', { vacancy, mapData });
+                    const { hypotheticalAbstract, neighbors } = interpretationResult;
+                    const planResult = await runtime.tools.run('Deconstruct Hypothesis to Experiment Plan', { hypotheticalAbstract });
+                    const costResult = await runtime.tools.run('Price Experiment Plan', { experimentPlan: planResult.experimentPlan });
+                    const organImpactResult = await runtime.tools.run('Assess Organ-Specific Aging Impact', { synergySummary: hypotheticalAbstract });
+                    
+                    await runtime.tools.run('RecordHypothesis', {
+                        hypotheticalAbstract,
+                        neighbors,
+                        estimatedCost: costResult.estimatedCost,
+                        requiredAssays: planResult.experimentPlan.key_measurements,
+                        experimentPlan: planResult.experimentPlan,
+                        costBreakdown: costResult.costBreakdown,
+                        organImpacts: organImpactResult.organImpacts,
+                        trialPriorityScore: 50,
+                    });
+                } catch (e) {
+                    runtime.logEvent(\`[Opportunistic] ⚠️ Failed to process a vacancy: \${e.message}\`);
+                }
+            }
+            return { success: true, message: \`Opportunistic generation completed for \${topVacancies.length} vacancies.\` };
+        `
     },
     {
         name: 'Bootstrap Web Proxy Service',

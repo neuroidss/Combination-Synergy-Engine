@@ -1,5 +1,3 @@
-
-
 export const UI_COMPONENTS_CODE = `
 const InterventionTypeIcon = ({ type }) => {
     const typeMap = {
@@ -105,18 +103,101 @@ const SourceCard = ({source}) => (
     </div>
 );
 
-const InterpretationCard = ({ interpretation }) => (
-    <div className="bg-slate-800/60 p-3 rounded-lg border-2 border-dashed border-purple-500/80">
-        <h4 className="text-base font-bold text-purple-300 mb-2">Hypothetical Research Abstract</h4>
-        <p className="text-sm text-slate-200 whitespace-pre-wrap mb-3">{interpretation.hypotheticalAbstract}</p>
-        <div className="pt-3 border-t border-slate-700">
-            <h5 className="font-semibold text-cyan-300 mb-2 text-xs uppercase tracking-wider">Based on the gap between:</h5>
-            <ul className="list-disc list-inside space-y-1 text-xs text-slate-400">
-                {interpretation.neighbors.map((n, i) => <li key={i} className="truncate">{n.title}</li>)}
-            </ul>
+const OrganImpactDisplay = ({ impacts, justification }) => {
+    if (!impacts || Object.keys(impacts).length === 0) return null;
+    
+    const impactMeta = {
+        'High Positive': { color: 'text-emerald-300', symbol: '↑↑↑' },
+        'Moderate Positive': { color: 'text-emerald-400', symbol: '↑↑' },
+        'Low Positive': { color: 'text-emerald-500', symbol: '↑' },
+        'Negligible': { color: 'text-slate-500', symbol: '—' },
+        'Low Negative': { color: 'text-yellow-500', symbol: '↓' },
+        'Moderate Negative': { color: 'text-orange-400', symbol: '↓↓' },
+        'High Negative': { color: 'text-red-400', symbol: '↓↓↓' },
+    };
+
+    const relevantImpacts = Object.entries(impacts)
+        .filter(([key, value]) => key.endsWith('_impact') && value !== 'Negligible')
+        .map(([key, value]) => ({
+            organ: key.replace('_impact', ''),
+            impact: value,
+        }));
+        
+    if (relevantImpacts.length === 0) return null;
+    
+    return (
+        <div className="mt-2 pt-3 border-t border-slate-700/50 group relative">
+            <h5 className="text-xs font-bold text-cyan-300 uppercase tracking-wider mb-2">Organ Signature Impact</h5>
+            <div className="flex flex-wrap gap-x-3 gap-y-1">
+                {relevantImpacts.map(({organ, impact}) => (
+                    <div key={organ} className="flex items-center gap-1">
+                        <span className="text-sm capitalize">{organ}</span>
+                        <span className={\`font-mono font-bold \${impactMeta[impact]?.color || 'text-slate-200'}\`}>
+                            {impactMeta[impact]?.symbol || '?'}
+                        </span>
+                    </div>
+                ))}
+            </div>
+            {justification && (
+                 <div className="absolute bottom-full mb-2 w-72 bg-slate-800 text-white text-xs rounded-lg p-2 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none z-10 border border-slate-600 shadow-lg">
+                    <h6 className="font-bold text-cyan-300 mb-1">Justification</h6>
+                    {justification}
+                </div>
+            )}
         </div>
+    );
+};
+
+const HypothesisCard = ({ hypothesis }) => (
+    <div className="bg-slate-800/60 p-3 rounded-lg border-2 border-dashed border-purple-500/80 flex flex-col gap-3">
+        <div>
+            <h4 className="text-base font-bold text-purple-300 mb-1">Hypothetical Research Abstract</h4>
+            <p className="text-sm text-slate-200 whitespace-pre-wrap">{hypothesis.hypotheticalAbstract}</p>
+        </div>
+        
+        <details className="bg-black/30 p-3 rounded-lg border border-slate-700 group">
+            <summary className="cursor-pointer list-none flex items-center justify-between gap-4">
+                 <div>
+                    <div className="text-xs uppercase tracking-wider text-slate-400">Est. In Vitro Cost</div>
+                    <div className="text-2xl font-bold text-emerald-400">\${(hypothesis.estimatedCost || 0).toLocaleString()}</div>
+                 </div>
+                 <div className="text-right">
+                    <div className="text-xs uppercase tracking-wider text-slate-400">Required Assays</div>
+                    <p className="text-xs text-slate-300 max-w-xs truncate" title={(hypothesis.requiredAssays || []).join(', ')}>{(hypothesis.requiredAssays || []).join(', ')}</p>
+                 </div>
+                 <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-slate-400 transition-transform group-open:rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+            </summary>
+            <div className="mt-3 pt-3 border-t border-slate-600 text-xs">
+                {hypothesis.experimentPlan && (
+                    <div className="mb-3">
+                        <h5 className="font-bold text-cyan-300 mb-1">Experiment Plan</h5>
+                        <p className="text-slate-300"><strong>Cell Model:</strong> {hypothesis.experimentPlan.cell_model}</p>
+                        <p className="text-slate-300"><strong>Interventions:</strong> {(hypothesis.experimentPlan.interventions || []).join(', ')}</p>
+                        <p className="text-slate-300"><strong>Justification:</strong> {hypothesis.experimentPlan.justification}</p>
+                    </div>
+                )}
+                 {hypothesis.costBreakdown && (
+                    <div>
+                        <h5 className="font-bold text-cyan-300 mb-1">Cost Breakdown</h5>
+                        <ul className="text-slate-400 list-disc list-inside">
+                            {hypothesis.costBreakdown.map((item, i) => <li key={i}>{item.item}: \${item.cost.toLocaleString()}</li>)}
+                            <li>Overhead & Consumables (x1.5)</li>
+                        </ul>
+                    </div>
+                )}
+            </div>
+        </details>
+        
+        <OrganImpactDisplay impacts={hypothesis.organImpacts} justification={hypothesis.organImpacts?.justification} />
+        <details className="text-xs">
+            <summary className="cursor-pointer text-cyan-500 hover:underline">Show Inspiring Neighbors ({hypothesis.neighbors.length})...</summary>
+            <ul className="list-disc list-inside space-y-1 text-slate-400 mt-2">
+                {hypothesis.neighbors.map((n, i) => <li key={i} className="truncate">{n.title}</li>)}
+            </ul>
+        </details>
     </div>
 );
+
 
 const MoaScoreIndicator = ({ score, justification }) => {
     const size = 60;
@@ -201,6 +282,7 @@ const SynergyCard = ({synergy, actions, applySynergy, anyOrganoidAlive}) => {
                             <p className="text-sm text-yellow-200">{synergy.potentialRisks}</p>
                         </div>
                     )}
+                     <OrganImpactDisplay impacts={synergy.organImpacts} justification={synergy.organImpacts?.justification} />
                      {synergy.sourceUri && (
                         <div className="mt-auto pt-2 border-t border-slate-700/50">
                             <p className="text-xs text-slate-500">Source:</p>
@@ -225,6 +307,26 @@ const SynergyCard = ({synergy, actions, applySynergy, anyOrganoidAlive}) => {
                      <TheoryAlignmentChart scores={synergy.theoryAlignmentScores || {}} />
                 </div>
             </div>
+            
+             <details className="mt-4 bg-black/20 p-3 rounded-lg border border-slate-700 group">
+                <summary className="cursor-pointer list-none flex items-center justify-between">
+                    <div className="text-xs uppercase tracking-wider text-slate-400">Est. Validation Cost</div>
+                    <div className="text-2xl font-bold text-emerald-400">\${(synergy.estimatedCost || 0).toLocaleString()}</div>
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-slate-400 transition-transform group-open:rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                </summary>
+                <div className="mt-3 pt-3 border-t border-slate-600 text-xs text-slate-300">
+                    <h5 className="font-bold text-cyan-300 mb-1">Cost Breakdown</h5>
+                    <ul className="space-y-1">
+                        {(synergy.costBreakdown || []).map((item, i) => 
+                            <li key={i} className="flex justify-between items-center">
+                                <span>{item.item} <em className="text-slate-400">({item.note})</em></span>
+                                <span className="font-mono">\${item.cost.toLocaleString()}</span>
+                            </li>
+                        )}
+                    </ul>
+                </div>
+            </details>
+
             <div className="mt-4 flex items-center justify-between gap-4">
                 {actions}
                 <button 
@@ -336,6 +438,12 @@ const DossierCard = ({ dossier, synergy }) => {
                 <summary className="cursor-pointer text-cyan-400 hover:underline">Show Full Rationale & Details...</summary>
                 <div className="mt-3 space-y-4 pt-3 border-t border-slate-700/50">
                     <div><h4 className="font-semibold text-cyan-300 mb-1">Scientific Rationale</h4><p className="text-sm text-slate-300">{dossier.scientificRationale}</p></div>
+                    {dossier.molecularMechanism && (
+                        <div className="bg-black/30 p-3 rounded-md border border-slate-700">
+                            <h4 className="font-semibold text-purple-300 mb-1">Molecular Mechanism Validation (Virtual Cell)</h4>
+                            <p className="text-sm text-slate-300 whitespace-pre-wrap">{dossier.molecularMechanism}</p>
+                        </div>
+                    )}
                     <div className="bg-black/30 p-3 rounded-md border border-slate-700"><h4 className="font-semibold text-emerald-300 mb-1">In Silico Validation (SynergyForge)</h4><p className="text-sm text-slate-300 font-mono">{dossier.inSilicoValidation}</p></div>
                     <div><h4 className="font-semibold text-cyan-300 mb-1">Market & IP Opportunity</h4><p className="text-sm text-slate-300">{dossier.marketAndIP}</p></div>
                     <div><h4 className="font-semibold text-cyan-300 mb-1">Proposed Roadmap</h4><p className="text-sm text-slate-300">{dossier.roadmap}</p></div>
@@ -374,4 +482,56 @@ const LoadingIndicator = ({ message }) => (
         <span>{message || 'Working...'}</span>
     </div>
 );
-`;
+
+const RankedHypothesesView = ({ rankedItems }) => {
+    if (rankedItems.length === 0) {
+        return <div className="p-4 text-center text-slate-500">No hypotheses have been generated or ranked yet. Run a research or venture analysis task.</div>;
+    }
+
+    return (
+        <div className="flex flex-col h-full">
+            <div className="flex-grow overflow-y-auto p-3">
+                <table className="w-full text-left text-sm table-fixed">
+                    <thead className="sticky top-0 bg-slate-800/80 backdrop-blur-sm">
+                        <tr>
+                            <th className="p-2 w-2/5">Hypothesis</th>
+                            <th className="p-2 text-center">Sci. Score</th>
+                            <th className="p-2 text-center">Est. Cost</th>
+                            <th className="p-2 font-bold text-amber-300 text-center">Sci. ROI</th>
+                            <th className="p-2 text-center">Organ Impact</th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-700/50">
+                        {rankedItems.slice(0, 100).map(item => {
+                            const data = item.data;
+                            const isSynergy = item.type === 'synergy';
+                            const title = isSynergy ? data.combination.map(c => c.name).join(' + ') : data.hypotheticalAbstract.substring(0, 100) + '...';
+                            const score = data.trialPriorityScore || (data.synergyData ? data.synergyData.trialPriorityScore : 0);
+                            const cost = data.estimatedCost;
+                            const organImpacts = data.organImpacts || {};
+                            const relevantImpacts = Object.entries(organImpacts)
+                                .filter(([key, value]) => key.endsWith('_impact') && value !== 'Negligible')
+                                .map(([key, value]) => ({ organ: key.replace('_impact', ''), impact: value, }));
+                            const costBreakdownText = data.costBreakdown?.map(cb => \`\${cb.item}: $\${cb.cost.toLocaleString()}\`).join('\\n') || 'No breakdown available.';
+
+                            return (
+                                <tr key={item.id} className="hover:bg-slate-800/50">
+                                    <td className="p-2 align-top font-semibold text-cyan-300 truncate" title={isSynergy ? data.summary : data.hypotheticalAbstract}>{title}</td>
+                                    <td className="p-2 align-top text-center font-mono">{score}</td>
+                                    <td className="p-2 align-top text-center font-mono" title={costBreakdownText}>\${cost ? cost.toLocaleString() : 'N/A'}</td>
+                                    <td className="p-2 align-top text-center font-mono font-bold text-amber-300">{item.scientificROI.toFixed(1)}</td>
+                                    <td className="p-2 align-top text-center">
+                                        <div className="flex flex-wrap justify-center gap-1">
+                                            {relevantImpacts.map(i => <span key={i.organ} className="text-xs bg-slate-700 px-1.5 py-0.5 rounded" title={\`\${i.organ}: \${i.impact}\`}>{i.organ.charAt(0).toUpperCase()}</span>)}
+                                        </div>
+                                    </td>
+                                </tr>
+                            );
+                        })}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+};
+`

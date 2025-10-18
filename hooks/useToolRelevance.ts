@@ -87,7 +87,7 @@ export const useToolRelevance = ({ allTools, logEvent }: { allTools: LLMTool[], 
             }
             
             if (systemPromptForContext) {
-                contextForEmbedding += `System Goal: ${systemPromptForContext}\\n\\n`;
+                contextForEmbedding += `System Goal: ${systemPromptForContext}\n\n`;
             }
             contextForEmbedding += `User's Current Task: ${userRequestText}`;
 
@@ -116,7 +116,7 @@ export const useToolRelevance = ({ allTools, logEvent }: { allTools: LLMTool[], 
                 const passed = score >= relevanceThreshold;
                 debugLogLines.push(`- ${passed ? '✅' : '❌'} ${tool.name}: ${score.toFixed(3)}`);
             });
-            logEvent(debugLogLines.join('\\n'));
+            logEvent(debugLogLines.join('\n'));
 
             const relevantToolIds = new Set(topKTools.map(item => item.tool.id));
             

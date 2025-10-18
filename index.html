@@ -21,6 +21,19 @@
       .animate-text {
         animation: text 5s ease infinite;
       }
+      @keyframes fade-in-scale {
+        from {
+          opacity: 0;
+          transform: translate(-50%, -50%) scale(0.5);
+        }
+        to {
+          opacity: 1;
+          transform: translate(-50%, -50%) scale(1);
+        }
+      }
+      .animate-fade-in-scale {
+        animation: fade-in-scale 0.5s ease-out forwards;
+      }
     </style>
   <script type="importmap">
 {

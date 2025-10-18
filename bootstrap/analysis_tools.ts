@@ -1,7 +1,352 @@
-
 import type { ToolCreatorPayload } from '../types';
 
 export const ANALYSIS_TOOLS: ToolCreatorPayload[] = [
+    {
+        name: "FindMarketPriceForLabItem",
+        description: "Searches a major lab supplier (e.g., Sigma-Aldrich) for a specific lab item (chemical, kit) and attempts to extract its price in USD using web scraping and AI analysis. This tool is designed to be updatable.",
+        category: "Functional",
+        executionEnvironment: "Client",
+        purpose: "To dynamically fetch real-world cost data for scientific materials, enabling on-the-fly, evidence-based cost estimation. Its implementation can be updated by the 'UpdatePricingModel' workflow.",
+        parameters: [
+            { name: "itemName", type: "string", description: "The name of the chemical, kit, or material to search for.", required: true }
+        ],
+        implementationCode: `
+            const { itemName } = args;
+            runtime.logEvent(\`[Price Finder] Searching market price for: \${itemName}\`);
+    
+            try {
+                // Stage 1: Search for the product page, starting with Sigma-Aldrich
+                const searchResults = await runtime.search.web(\`"sigma aldrich" \${itemName} price\`, 1);
+                if (!searchResults || searchResults.length === 0 || !searchResults[0].link.includes('sigmaaldrich.com')) {
+                    runtime.logEvent(\`[Price Finder] Could not find a product page on Sigma-Aldrich for \${itemName}.\`);
+                    return { price: null };
+                }
+    
+                const productUrl = searchResults[0].link;
+                runtime.logEvent(\`[Price Finder] Found potential product page: \${productUrl}\`);
+    
+                // Stage 2: "Read" the page
+                const pageContentResult = await runtime.tools.run('Read Webpage Content', { url: productUrl });
+                const pageContent = pageContentResult.textContent;
+    
+                if (!pageContent) {
+                    throw new Error("Failed to read content from product page.");
+                }
+                
+                // Stage 3: Ask the AI to extract the price from the text
+                const systemInstruction = \`You are an expert data extraction bot. Your only task is to find the price in USD from the provided text of a product webpage. Look for patterns like "$123.45" or "Price: 123.45 USD". If there are multiple prices, pick the smallest one. Respond with ONLY a single JSON object: {"price": 123.45} or {"price": null} if not found.\`;
+                const prompt = \`Extract the price in USD from this text:\\n\\n\${pageContent.substring(0, 15000)}\`;
+    
+                const aiResponseText = await runtime.ai.generateText(prompt, systemInstruction);
+                const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
+    
+                if (jsonMatch) {
+                    const parsedResult = JSON.parse(jsonMatch[0]);
+                    if (parsedResult && typeof parsedResult.price === 'number') {
+                        runtime.logEvent(\`[Price Finder] ✅ Found price for \${itemName}: $\${parsedResult.price}\`);
+                        return { price: parsedResult.price };
+                    }
+                }
+                
+                runtime.logEvent(\`[Price Finder] Could not determine a price for \${itemName}.\`);
+                return { price: null };
+    
+            } catch (e) {
+                runtime.logEvent(\`[Price Finder] ❌ Error fetching price for \${itemName}: \${e.message}\`);
+                return { price: null }; // Never break the main process
+            }
+        `
+    },
+    {
+        name: 'Assess Organ-Specific Aging Impact',
+        description: "Analyzes a synergy's mechanism of action to predict its potential impact on organ-specific epigenetic clocks (e.g., brain, liver, blood, skin).",
+        category: 'Functional',
+        executionEnvironment: 'Client',
+        purpose: "To move beyond a general 'biological age' and provide targeted predictions about which tissues a longevity intervention will rejuvenate, making hypotheses more specific and testable.",
+        parameters: [
+            { name: 'synergySummary', type: 'string', description: "The scientific rationale or abstract for the synergistic intervention.", "required": true }
+        ],
+        implementationCode: `
+            const { synergySummary } = args;
+            const systemInstruction = \`You are an expert in geroscience and epigenetic clocks. Based on the scientific mechanism of a therapy, predict its likely impact on the biological age of specific organs.
+    Impact values can be: 'High Positive', 'Moderate Positive', 'Low Positive', 'Negligible', 'Low Negative', 'Moderate Negative', 'High Negative'.
+    Respond with ONLY a single, valid JSON object in the following format:
+    {
+      "brain_impact": "High Positive",
+      "liver_impact": "Moderate Positive",
+      "blood_impact": "Low Positive",
+      "skin_impact": "Negligible",
+      "justification": "The intervention targets neuro-inflammation, strongly affecting brain clocks. Its systemic metabolic effects give it a moderate impact on the liver."
+    }\`;
+            const prompt = \`Therapy Rationale: "\${synergySummary}"\\n\\nBased on this, evaluate the impact on brain, liver, blood, and skin aging.\`;
+            
+            const aiResponseText = await runtime.ai.generateText(prompt, systemInstruction);
+            try {
+                const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
+                if (!jsonMatch) throw new Error("No valid JSON response from AI.");
+                const parsedResult = JSON.parse(jsonMatch[0]);
+                runtime.logEvent(\`[Organ Impact] Assessed organ-specific impact.\`);
+                return { success: true, organImpacts: parsedResult };
+            } catch(e) {
+                throw new Error('Failed to parse organ impact from AI: ' + e.message + ' Raw response: ' + aiResponseText);
+            }
+        `
+    },
+    {
+        name: "Deconstruct Hypothesis to Experiment Plan",
+        description: "Takes a scientific hypothesis and breaks it down into a concrete, step-by-step in vitro experiment plan, listing the necessary assays and measurements.",
+        category: "Functional",
+        executionEnvironment: "Client",
+        purpose: "To translate an abstract idea into a tangible list of scientific tasks required for its initial validation.",
+        parameters: [
+            { name: "hypotheticalAbstract", type: "string", description: "The abstract of the hypothesis to be tested.", required: true }
+        ],
+        implementationCode: `
+            const { hypotheticalAbstract } = args;
+            const systemInstruction = \`You are a principal investigator designing a pilot experiment. Based on the hypothesis in the abstract, define the simplest possible in vitro experiment to get a 'go/no-go' signal.
+You MUST respond with ONLY a single, valid JSON object in the following format:
+{
+  "cell_model": "Human primary fibroblasts (HDFs)",
+  "interventions": ["Compound X (10uM)", "Compound Y (5uM)", "Combination (X+Y)"],
+  "key_measurements": [
+    "Cell Viability Assay (MTT)",
+    "Senescence Staining (SA-β-gal)",
+    "qPCR for SIRT1 and p53 genes",
+    "Mitochondrial Respiration Assay (Seahorse)"
+  ],
+  "justification": "This plan directly tests the hypothesis's claims about senescence and metabolism in a standard human cell model."
+}\`;
+            const prompt = \`Hypothesis: "\${hypotheticalAbstract}"\\n\\nDesign the experimental plan as a JSON object.\`;
+    
+            const aiResponseText = await runtime.ai.generateText(prompt, systemInstruction);
+            try {
+                const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
+                if (!jsonMatch) throw new Error("No valid JSON response from AI for experiment plan.");
+                const parsedResult = JSON.parse(jsonMatch[0]);
+                runtime.logEvent('[Experiment Planner] ✅ Deconstructed hypothesis into concrete plan.');
+                return { success: true, experimentPlan: parsedResult };
+            } catch(e) {
+                throw new Error('Failed to parse experiment plan from AI: ' + e.message + ' Raw response: ' + aiResponseText);
+            }
+        `
+    },
+    {
+        name: "Price Experiment Plan",
+        description: "Calculates the estimated cost of a full in vitro experiment plan by querying a knowledge base of market prices for lab consumables and services.",
+        category: "Functional",
+        executionEnvironment: "Client",
+        purpose: "To assign a real-world cost to a detailed, multi-step scientific research plan, enabling economic prioritization of hypotheses.",
+        parameters: [
+            { name: "experimentPlan", type: "object", description: "The JSON object defining the experiment from the 'DeconstructHypothesisToExperimentPlan' tool.", required: true }
+        ],
+        implementationCode: `
+            const { experimentPlan } = args;
+            const COST_DATABASE = {
+                // Cell Lines
+                "Human primary fibroblasts (HDFs)": { "cost": 800, "unit": "per vial" },
+                "HEK293 cells": { "cost": 450, "unit": "per vial" },
+                "SH-SY5Y neuroblastoma cells": { "cost": 550, "unit": "per vial" },
+                // Basic Assays & Kits
+                "Cell Viability Assay (MTT)": { "cost": 350, "unit": "per 96-well plate" },
+                "Senescence Staining (SA-β-gal)": { "cost": 400, "unit": "per kit (20-50 samples)" },
+                "ATP Luminescence Assay": { "cost": 450, "unit": "per 96-well plate kit" },
+                "ELISA (Cytokine Panel)": { "cost": 900, "unit": "per 96-well plate kit" },
+                "Basic Toxicology Panel": { "cost": 1200, "unit": "per compound" },
+                // Molecular Biology
+                "qPCR for SIRT1 and p53 genes": { "cost": 200, "unit": "per gene, per plate" },
+                "Western Blot for mTOR protein": { "cost": 650, "unit": "per protein target" },
+                // Advanced Assays
+                "Mitochondrial Respiration Assay (Seahorse)": { "cost": 2500, "unit": "per plate, full run" },
+                "High-Content Imaging Screen": { "cost": 3000, "unit": "per plate, per marker" },
+                // General & Overhead
+                "Cell Culture Maintenance": { "cost": 500, "unit": "per month" },
+                "Overhead & Consumables": { "cost_multiplier": 1.5, "unit": "factor on subtotal" },
+                "Default Assay": { "cost": 700, "unit": "per plate/kit" }, // Price for any unlisted assay
+            };
+    
+            let subTotal = 0;
+            const costBreakdown = [];
+    
+            // Cost of cell model
+            if (experimentPlan.cell_model) {
+                const cellModelCost = COST_DATABASE[experimentPlan.cell_model]?.cost || 500;
+                subTotal += cellModelCost;
+                costBreakdown.push({ item: experimentPlan.cell_model, cost: cellModelCost });
+            }
+    
+            // Cost of measurements/assays
+            if (experimentPlan.key_measurements) {
+                for (const measurement of experimentPlan.key_measurements) {
+                    const matchedKey = Object.keys(COST_DATABASE).find(key => measurement.toLowerCase().includes(key.toLowerCase().split(' for ')[0]));
+                    if (matchedKey) {
+                        const costItem = COST_DATABASE[matchedKey];
+                        subTotal += costItem.cost;
+                        costBreakdown.push({ item: measurement, cost: costItem.cost });
+                    } else {
+                        // If not found in DB, search online
+                        const marketPriceResult = await runtime.tools.run('FindMarketPriceForLabItem', { itemName: measurement });
+                        if (marketPriceResult && marketPriceResult.price !== null) {
+                            subTotal += marketPriceResult.price;
+                            costBreakdown.push({ item: measurement, cost: marketPriceResult.price });
+                        } else {
+                            // If not found online, use default
+                            const defaultCostItem = COST_DATABASE["Default Assay"];
+                            subTotal += defaultCostItem.cost;
+                            costBreakdown.push({ item: \`\${measurement} (Unlisted)\`, cost: defaultCostItem.cost });
+                        }
+                    }
+                }
+            }
+            
+            subTotal += COST_DATABASE["Cell Culture Maintenance"].cost;
+            costBreakdown.push({ item: "Cell Culture Maintenance", cost: COST_DATABASE["Cell Culture Maintenance"].cost });
+
+            const totalCost = subTotal * COST_DATABASE['Overhead & Consumables'].cost_multiplier;
+    
+            runtime.logEvent(\`[Cost Engine] ✅ Estimated cost for plan: $\\\${totalCost.toFixed(0)}\`);
+            return { success: true, estimatedCost: Math.round(totalCost), costBreakdown: costBreakdown };
+        `
+    },
+    {
+        name: "Estimate Synergy Validation Cost",
+        description: "Provides a rapid, first-pass cost estimate for validating a synergistic combination by summing the known costs of its individual interventions.",
+        category: "Functional",
+        executionEnvironment: "Client",
+        purpose: "To immediately attach a cost to a newly discovered synergy, enabling rapid financial prioritization without needing a full, detailed experiment plan.",
+        parameters: [
+            { name: "combination", type: "array", description: "The array of intervention objects, each with a 'name' and 'type'.", required: true }
+        ],
+        implementationCode: `
+            const { combination } = args;
+            
+            // This internal DB acts as a cache and source for common items
+            const INTERVENTION_COST_DB = {
+                // Common Drugs & Supplements
+                "Metformin": { cost: 1200, note: "Standard in vitro screening package" },
+                "Rapamycin": { cost: 1800, note: "mTOR pathway analysis" },
+                "Resveratrol": { cost: 1000, note: "Basic sirtuin activity assays" },
+                "NMN": { cost: 1500, note: "NAD+ level measurement and metabolic assays" },
+                "Dasatinib": { cost: 2500, note: "Senolytic activity and toxicity screen" },
+                "Quercetin": { cost: 1000, note: "Basic antioxidant and senolytic assays" },
+                "Fisetin": { cost: 1300, note: "Advanced senolytic and antioxidant assays" },
+                // Lifestyle (cost of measuring effects)
+                "Exercise": { cost: 2000, note: "Simulated via myokine application, includes metabolic assays" },
+                "Caloric Restriction": { cost: 1500, note: "Nutrient-deprived media, includes mTOR/AMPK analysis" },
+                // Other
+                "Unknown Compound": { cost: 3000, note: "Default for unlisted/unfound compounds" },
+                "Base Assay Suite": { cost: 2500, note: "Core set of assays (viability, senescence, qPCR) for any synergy" }
+            };
+
+            let totalCost = INTERVENTION_COST_DB["Base Assay Suite"].cost;
+            const costBreakdown = [{ item: "Base Assay Suite", cost: totalCost, note: INTERVENTION_COST_DB["Base Assay Suite"].note }];
+
+            for (const intervention of combination) {
+                let foundCost = false;
+                let interventionCost = 0;
+                let itemNote = '';
+
+                // First, check the quick internal database
+                const dbKey = Object.keys(INTERVENTION_COST_DB).find(k => intervention.name.toLowerCase().includes(k.toLowerCase()));
+                if (dbKey) {
+                    const item = INTERVENTION_COST_DB[dbKey];
+                    interventionCost = item.cost;
+                    itemNote = item.note;
+                    foundCost = true;
+                }
+                
+                // If not found, search online
+                if (!foundCost) {
+                    const marketPriceResult = await runtime.tools.run('FindMarketPriceForLabItem', { itemName: intervention.name });
+                    if (marketPriceResult && marketPriceResult.price !== null) {
+                        // Multiply by a factor, since the substance cost is not the full analysis cost
+                        interventionCost = marketPriceResult.price * 5 + 500; 
+                        itemNote = 'Price estimated from market rate + analysis overhead';
+                        foundCost = true;
+                    }
+                }
+
+                // If still not found anywhere, use the default
+                if (!foundCost) {
+                    const unknown = INTERVENTION_COST_DB["Unknown Compound"];
+                    interventionCost = unknown.cost;
+                    itemNote = unknown.note;
+                }
+
+                totalCost += interventionCost;
+                costBreakdown.push({ item: intervention.name, cost: Math.round(interventionCost), note: itemNote });
+            }
+
+            const finalCost = Math.round(totalCost);
+            runtime.logEvent(\`[Fast Cost] Estimated cost for \${combination.map(c=>c.name).join(' + ')}: $\\\${finalCost}\`);
+            return { success: true, estimatedCost: finalCost, costBreakdown };
+        `
+    },
+    {
+        name: "Virtual Cell Validator",
+        description: "For a given synergistic intervention, this tool simulates a molecular-level analysis, as if using a 'Virtual Cell'. It generates a detailed, step-by-step mechanistic explanation of how the synergy achieves its effect, referencing specific genes, proteins, and pathways.",
+        category: "Functional",
+        executionEnvironment: "Client",
+        purpose: "To bridge the gap between high-level functional outcomes (e.g., 'reduced inflammation') and the underlying molecular biology, adding deep scientific validation to each generated hypothesis.",
+        parameters: [
+            { name: "synergyCombination", type: "array", description: "The array of intervention names (e.g., ['Rapamycin', 'Metformin']).", required: true },
+            { name: "observedEffect", type: "string", description: "The high-level observed or hypothesized effect (e.g., 'Enhanced autophagy and reduced cellular senescence').", required: true }
+        ],
+        implementationCode: `
+            const { synergyCombination, observedEffect } = args;
+
+            const systemInstruction = \`You are a senior computational biologist with access to a perfect 'Virtual Cell' simulator. Your task is to explain HOW a given drug combination causes a specific biological effect at the molecular level.
+- Be specific. Name the key proteins, genes, and signaling pathways involved.
+- Describe the step-by-step chain of events.
+- Your explanation must be plausible and grounded in known biological principles.
+You MUST respond with ONLY a single, valid JSON object in the following format:
+{
+  "mechanistic_explanation": "1. Drug A enters the cell and inhibits protein X (e.g., mTORC1). \\\\n2. This inhibition leads to the dephosphorylation of protein Y (e.g., ULK1). \\\\n3. Simultaneously, Drug B activates enzyme Z (e.g., AMPK), which also phosphorylates ULK1 at a different site. \\\\n4. This dual-action on ULK1 hyper-activates the autophagy initiation complex, leading to a synergistic increase in autophagosome formation and enhanced clearance of senescent mitochondria."
+}\`;
+
+            const prompt = \`Combination: \${synergyCombination.join(' + ')}\\nObserved Effect: \${observedEffect}\\n\\nProvide the detailed, step-by-step molecular explanation for this synergistic effect.\`;
+
+            const aiResponseText = await runtime.ai.generateText(prompt, systemInstruction);
+            try {
+                const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
+                if (!jsonMatch) throw new Error("Virtual Cell Validator AI did not return a valid JSON object.");
+                const parsed = JSON.parse(jsonMatch[0]);
+                
+                runtime.logEvent(\`[Virtual Cell] ✅ Mechanistic explanation generated for \${synergyCombination.join(' + ')}.\`);
+                return { success: true, explanation: parsed.mechanistic_explanation };
+
+            } catch (e) {
+                throw new Error(\`Failed to generate mechanistic explanation: \${e.message}\`);
+            }
+        `
+    },
+     {
+        name: 'Prioritize Hypotheses by ROI',
+        description: "Ranks a list of hypotheses/synergies based on their 'Scientific ROI', calculated from their scientific promise (Trial Priority Score) and estimated validation cost.",
+        category: 'Functional',
+        executionEnvironment: 'Client',
+        purpose: "To create a final, venture-capital-ready list of the most promising and cost-effective research projects to pursue.",
+        parameters: [
+            { name: 'hypotheses', type: 'array', description: 'An array of hypothesis/synergy objects, each needing trialPriorityScore and estimatedTestCost properties.', required: true },
+        ],
+        implementationCode: `
+            const { hypotheses } = args;
+            if (!hypotheses || hypotheses.length === 0) {
+                return { success: true, rankedHypotheses: [] };
+            }
+            
+            const ranked = hypotheses.map(h => {
+                const score = (h.data.trialPriorityScore || (h.data.synergyData && h.data.synergyData.trialPriorityScore) || 50);
+                const cost = h.data.estimatedCost || 2500; // Use default cost if not present
+                return {
+                    ...h,
+                    scientificROI: score * 100 / cost,
+                };
+            }).sort((a, b) => b.scientificROI - a.scientificROI);
+            
+            runtime.logEvent(\`[Prioritizer] ✅ Ranked \${ranked.length} hypotheses by Scientific ROI.\`);
+            return { success: true, rankedHypotheses: ranked };
+        `
+    },
     {
         name: 'Embed All Sources',
         description: 'Takes a list of validated scientific sources and generates a vector embedding for the content of each one.',
@@ -376,37 +721,39 @@ For **each distinct combination** you find, you MUST call the 'RecordSynergy' to
                     if (toolCall.name === 'RecordSynergy') {
                         const synergyData = toolCall.arguments;
 
-                        // FIX: Make combination parsing robust. Handle if AI returns a string.
                         let combination = synergyData.combination;
                         if (typeof combination === 'string') {
-                            try {
-                                combination = JSON.parse(combination);
-                            } catch (e) {
-                                runtime.logEvent(\`[Synergy Analysis] ⚠️ WARNING: Could not parse 'combination' string from AI. Skipping. Data: \${synergyData.combination}\`);
+                            try { combination = JSON.parse(combination); } catch (e) {
+                                runtime.logEvent(\`[Synergy Analysis] ⚠️ WARNING: Could not parse 'combination' string from AI. Skipping.\`);
                                 continue;
                             }
                         }
 
                         if (!Array.isArray(combination) || combination.length === 0 || combination.some(c => typeof c !== 'object' || !c.name || !c.type)) {
-                            runtime.logEvent(\`[Synergy Analysis] ⚠️ WARNING: AI returned a malformed 'combination' structure for source "\${source.title.substring(0, 50)}...". Skipping this synergy. Data: \${JSON.stringify(synergyData.combination)}\`);
+                            runtime.logEvent(\`[Synergy Analysis] ⚠️ WARNING: AI returned a malformed 'combination' structure. Skipping.\`);
                             continue;
                         }
                         
-                        // Use the potentially corrected combination for scoring
                         const synergyToScore = { ...synergyData, combination };
 
-                        // Call the centralized scoring tool
+                        // --- NEW: INSTANT COST ESTIMATION ---
+                        const costResult = await runtime.tools.run('Estimate Synergy Validation Cost', { combination });
+                        
                         const scoringResult = await runtime.tools.run('Score Single Synergy', {
                             synergyToScore: synergyToScore,
                             backgroundSources: allSourcesForContext
                         });
+
+                        const organImpactResult = await runtime.tools.run('Assess Organ-Specific Aging Impact', { synergySummary: scoringResult.updatedSynergy.summary });
                         
-                        // Record the final synergy with all the scores and the source link
                         if (scoringResult.updatedSynergy) {
                              const finalSynergyData = { 
                                 ...scoringResult.updatedSynergy, 
+                                organImpacts: organImpactResult.organImpacts,
                                 sourceUri: source.url, 
-                                sourceTitle: source.title 
+                                sourceTitle: source.title,
+                                estimatedCost: costResult.estimatedCost,
+                                costBreakdown: costResult.costBreakdown,
                             };
                             const executionResult = await runtime.tools.run('RecordSynergy', finalSynergyData);
                             if (executionResult.synergy) {
@@ -572,7 +919,25 @@ BACKGROUND LITERATURE: \${JSON.stringify(backgroundSources.map(s => s.summary))}
             if (dossierAiResponse && dossierAiResponse.toolCalls && dossierAiResponse.toolCalls.length > 0) {
                 const toolCall = dossierAiResponse.toolCalls[0];
                 if (toolCall.name === 'RecordTrialDossier') {
-                    const dossierResult = await runtime.tools.run(toolCall.name, toolCall.arguments);
+                    // --- VIRTUAL CELL VALIDATION STEP ---
+                    runtime.logEvent(\`[Proposal] ...generating molecular mechanism validation for \${comboString}.\`);
+                    let molecularMechanism = 'Analysis could not be performed.';
+                    try {
+                        const validationResult = await runtime.tools.run('Virtual Cell Validator', {
+                            synergyCombination: synergy.combination.map(c => c.name),
+                            observedEffect: synergy.summary
+                        });
+                        if (validationResult.explanation) {
+                            molecularMechanism = validationResult.explanation;
+                        }
+                    } catch (e) {
+                         runtime.logEvent(\`[Proposal] ⚠️ Virtual Cell Validator failed: \${e.message}\`);
+                    }
+                    
+                    // Add the mechanism to the dossier arguments before recording
+                    const finalDossierArgs = { ...toolCall.arguments, molecularMechanism };
+
+                    const dossierResult = await runtime.tools.run(toolCall.name, finalDossierArgs);
                     if (dossierResult.dossier) {
                         generatedDossier = dossierResult.dossier;
                         runtime.logEvent(\`[Proposal] ...successfully wrote dossier for \${comboString}.\`);

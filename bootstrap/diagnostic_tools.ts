@@ -68,7 +68,7 @@ export const DIAGNOSTIC_TOOLS: ToolCreatorPayload[] = [
                 // The runtime's processRequest is enhanced to accept a model override.
                 const aiResponse = await runtime.ai.processRequest(prompt, systemInstruction, [recordTool], [], diagnosticModel);
                 
-                if (!aiResponse || !aiResponse.toolCalls || aiResponse.toolCalls.length === 0) {
+                if (!aiResponse || !aiResponse.toolCalls || !aiResponse.toolCalls.length === 0) {
                     throw new Error("The diagnostic AI failed to call the 'RecordErrorAnalysis' tool as instructed.");
                 }
                 
