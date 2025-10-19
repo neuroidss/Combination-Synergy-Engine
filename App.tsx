@@ -5,6 +5,7 @@ import type { LLMTool } from './types';
 import { AI_MODELS } from './constants';
 
 const App: React.FC = () => {
+    // FIX: All properties are now correctly typed as the underlying `useAppRuntime` hook's return type is properly inferred.
     const appRuntime = useAppRuntime();
     const { getTool, eventLog, apiCallCount, agentSwarm, isServerConnected, runtimeApi } = appRuntime;
     const [proxyBootstrapped, setProxyBootstrapped] = useState(false);
@@ -68,6 +69,10 @@ const App: React.FC = () => {
                         setMapNormalization: appRuntime.setMapNormalization,
                         taskPrompt: appRuntime.taskPrompt,
                         setTaskPrompt: appRuntime.setTaskPrompt,
+                        // Pass Ollama dynamic model props
+                        ollamaModels: appRuntime.ollamaModels,
+                        ollamaState: appRuntime.ollamaState,
+                        fetchOllamaModels: appRuntime.fetchOllamaModels,
                     }} 
                 />
             ) : (

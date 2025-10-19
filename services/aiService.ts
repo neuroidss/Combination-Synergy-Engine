@@ -22,7 +22,7 @@ export const processRequest = async (
     try {
         switch (model.provider) {
             case ModelProvider.GoogleAI:
-                return await geminiService.generateWithTools(userInput, systemInstruction, model.id, apiConfig, relevantTools, files);
+                return await geminiService.generateWithTools(userInput, systemInstruction, model.id, apiConfig.googleAIAPIKey || '', relevantTools, files);
             case ModelProvider.OpenAI_API:
                  return await openAIService.generateWithTools(userInput, systemInstruction, model.id, apiConfig, relevantTools, files);
             case ModelProvider.Ollama:
@@ -52,7 +52,7 @@ export const generateTextFromModel = async (
      try {
         switch (model.provider) {
             case ModelProvider.GoogleAI:
-                return await geminiService.generateText(userInput, systemInstruction, model.id, apiConfig, files);
+                return await geminiService.generateText(userInput, systemInstruction, model.id, apiConfig.googleAIAPIKey || '', files);
             case ModelProvider.OpenAI_API:
                 return await openAIService.generateText(userInput, systemInstruction, model.id, apiConfig, files);
             case ModelProvider.Ollama:
@@ -81,7 +81,7 @@ export const contextualizeWithSearch = async (
         console.warn(`Web search is only available for GoogleAI models. The selected model is ${model.provider}. Skipping search.`);
         return { summary: '', sources: [] };
     }
-    return geminiService.contextualizeWithSearch(prompt, apiConfig, model.id);
+    return geminiService.contextualizeWithSearch(prompt, apiConfig.googleAIAPIKey || '', model.id);
 };
 
 

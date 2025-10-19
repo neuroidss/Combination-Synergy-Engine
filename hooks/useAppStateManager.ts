@@ -1,8 +1,8 @@
-
-
 import { useState, useEffect, useCallback } from 'react';
 import { loadStateFromStorage, saveStateToStorage, saveMapStateToStorage, loadMapStateToStorage } from '../versioning';
 import type { AIModel, APIConfig } from '../types';
+// FIX: ModelProvider is now imported from its source in `types.ts` instead of from `constants.ts`.
+import { ModelProvider } from '../types';
 import { AI_MODELS } from '../constants';
 
 // FIX: Changed from const arrow function to a function declaration
@@ -12,9 +12,9 @@ export function useAppStateManager() {
     const [apiCallCount, setApiCallCount] = useState<Record<string, number>>({});
     const [selectedModel, setSelectedModel] = useState<AIModel>(AI_MODELS[0]);
     const [apiConfig, setApiConfig] = useState<APIConfig>({
-        googleAIAPIKey: process.env.GEMINI_API_KEY || '',
+        googleAIAPIKey: '',
         openAIAPIKey: '',
-        openAIBaseUrl: '',
+        openAIBaseUrl: 'http://localhost:11434/v1',
         ollamaHost: 'http://localhost:11434',
     });
     // Live feed state
@@ -26,19 +26,65 @@ export function useAppStateManager() {
     const [mapNormalization, setMapNormalization] = useState<any | null>(null);
     const [taskPrompt, setTaskPrompt] = useState('Discover a broad range of longevity interventions (e.g., drugs, supplements, lifestyle changes) and analyze them to find both known and novel synergistic combinations.');
 
+    // State for dynamic Ollama model fetching
+    const [ollamaModels, setOllamaModels] = useState<AIModel[]>([]);
+    const [ollamaState, setOllamaState] = useState<{ loading: boolean; error: string | null }>({ loading: false, error: null });
+
+    const fetchOllamaModels = useCallback(async () => {
+        setOllamaState({ loading: true, error: null });
+        try {
+            // Environment-aware URL selection to bypass CORS in remote deployments
+            const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+            const ollamaApiUrl = isLocal
+                ? `${apiConfig.ollamaHost}/api/tags`
+                : `http://localhost:3001/api/ollama-proxy/tags`;
+
+            logEvent(`[Ollama] Fetching models via: ${ollamaApiUrl}`);
+
+            const response = await fetch(ollamaApiUrl);
+            if (!response.ok) {
+                const errorText = await response.text();
+                const errorJson = JSON.parse(errorText);
+                const errorOrigin = isLocal ? `Ollama server at ${apiConfig.ollamaHost}` : 'the local MCP proxy server (localhost:3001)';
+                throw new Error(`Failed to fetch models from ${errorOrigin}. Status ${response.status}: ${errorJson.error || errorText}`);
+            }
+            const data = await response.json();
+            const models: AIModel[] = data.models.map((model: any) => ({
+                id: model.name,
+                name: model.name,
+                provider: ModelProvider.Ollama,
+            }));
+            setOllamaModels(models);
+            if (models.length === 0) {
+                 setOllamaState({ loading: false, error: "No models found on Ollama server." });
+            } else {
+                 setOllamaState({ loading: false, error: null });
+            }
+        } catch (error) {
+            const message = error instanceof Error ? error.message : "Failed to fetch Ollama models.";
+            setOllamaState({ loading: false, error: message });
+            setOllamaModels([]);
+        }
+    }, [apiConfig.ollamaHost]);
+
 
     // Load state from storage on initial mount
     useEffect(() => {
         const storedState = loadStateFromStorage();
-        if (storedState?.apiConfig) {
-            // Merge stored config with env vars, giving env vars precedence.
-            setApiConfig(prevConfig => ({
-                ...prevConfig,
-                openAIAPIKey: storedState.apiConfig?.openAIAPIKey ?? '',
-                openAIBaseUrl: storedState.apiConfig?.openAIBaseUrl ?? '',
-                ollamaHost: storedState.apiConfig?.ollamaHost ?? 'http://localhost:11434',
-            }));
-            console.log("Loaded non-Google API config from storage.", storedState.apiConfig);
+        
+        // Load API config, prioritizing user-saved keys, then environment variables
+        setApiConfig(prevConfig => ({
+            ...prevConfig,
+            googleAIAPIKey: storedState?.apiConfig?.googleAIAPIKey || process.env.GEMINI_API_KEY || '',
+            openAIAPIKey: storedState?.apiConfig?.openAIAPIKey || '',
+            openAIBaseUrl: storedState?.apiConfig?.openAIBaseUrl || 'http://localhost:11434/v1',
+            ollamaHost: storedState?.apiConfig?.ollamaHost || 'http://localhost:11434',
+        }));
+
+        if (storedState?.apiConfig?.googleAIAPIKey) {
+            console.log("Loaded API config from storage.", storedState.apiConfig);
+        } else if (process.env.GEMINI_API_KEY) {
+            logEvent("[SYSTEM] Loaded Gemini API key from environment variable.");
         }
         
         const log = (msg: string) => setEventLog(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
@@ -104,7 +150,7 @@ export function useAppStateManager() {
         // Create a version of the config that only includes user-set values,
         // not ones from process.env, to avoid writing them to localStorage.
         const configToSave: APIConfig = {
-            googleAIAPIKey: undefined, // Never save Google AI key
+            googleAIAPIKey: apiConfig.googleAIAPIKey,
             openAIAPIKey: apiConfig.openAIAPIKey,
             openAIBaseUrl: apiConfig.openAIBaseUrl,
             ollamaHost: apiConfig.ollamaHost,
@@ -151,5 +197,9 @@ export function useAppStateManager() {
         setMapNormalization,
         taskPrompt,
         setTaskPrompt,
+        // Ollama dynamic model state and fetcher
+        ollamaModels,
+        ollamaState,
+        fetchOllamaModels,
     };
 }

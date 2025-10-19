@@ -1,4 +1,3 @@
-
 import type { ToolCreatorPayload } from '../types';
 
 export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
@@ -278,13 +277,19 @@ export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
         const { researchObjective } = args;
         runtime.logEvent('[Workflow] Starting new dynamic research workflow...');
 
+        // -- INTELLIGENT CONTINUATION: Get existing knowledge --
+        const existingSources = runtime.getState().allSources || [];
+        const existingSourceUris = new Set(existingSources.map(s => s.uri || s.url));
+        runtime.logEvent(\`[Workflow] Continuing session with \${existingSourceUris.size} already validated sources.\`);
+
+
         // Step 1: Refine Search Queries
         runtime.logEvent('[Workflow] Step 1: Refining search queries...');
         const refineResult = await runtime.tools.run('Refine Search Queries', { researchObjective });
         const refinedQueryString = refineResult.queries.join('; ');
 
         // Step 2: Deep Federated Search
-        runtime.logEvent('[Workflow] Step 2: Performing deep search on scientific literature...');
+        runtime.logEvent('[Workflow] Step 2: Performing deep search for *new* literature...');
         let proxyUrl = null;
         if (runtime.isServerConnected()) {
             try {
@@ -298,23 +303,46 @@ export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
         const searchResult = await runtime.tools.run('Federated Scientific Search', { query: refinedQueryString, maxResultsPerSource: 20, proxyUrl });
         let initialSearchResults = searchResult.searchResults || [];
         
-        if (initialSearchResults.length === 0) {
-            runtime.logEvent('[Workflow] Initial search failed. Engaging diagnostic retry...');
-            const retrySearchResult = await runtime.tools.run('Diagnose and Retry Search', { originalQuery: refinedQueryString, researchObjective, reasonForFailure: 'The initial refined queries returned zero results.', proxyUrl });
-            initialSearchResults = retrySearchResult.searchResults || [];
-            if (initialSearchResults.length === 0) {
-                 throw new Error("Workflow failed at Step 2: Search returned no results, even after retry.");
-            }
+        // -- INTELLIGENT CONTINUATION: Filter out already processed sources --
+        const newSearchResults = initialSearchResults.filter(result => {
+            const canonicalUrl = runtime.search.buildCanonicalUrl(result.link);
+            return canonicalUrl && !existingSourceUris.has(canonicalUrl);
+        });
+        
+        runtime.logEvent(\`[Workflow] Search found \${initialSearchResults.length} total results. \${newSearchResults.length} are new and will be processed.\`);
+
+        if (newSearchResults.length === 0 && initialSearchResults.length > 0) {
+            runtime.logEvent('[Workflow] No new articles found matching the query. Analysis will proceed with existing data.');
         }
 
-        // Step 3: Rank Search Results
-        runtime.logEvent(\`[Workflow] Step 3: Ranking \${initialSearchResults.length} potential sources...\`);
+        if (newSearchResults.length === 0 && initialSearchResults.length === 0) {
+            runtime.logEvent('[Workflow] Initial search failed. Engaging diagnostic retry...');
+            const retrySearchResult = await runtime.tools.run('Diagnose and Retry Search', { originalQuery: refinedQueryString, researchObjective, reasonForFailure: 'The initial refined queries returned zero results.', proxyUrl });
+            const retryResults = retrySearchResult.searchResults || [];
+            
+            // Also filter the retry results
+            const newRetryResults = retryResults.filter(result => {
+                const canonicalUrl = runtime.search.buildCanonicalUrl(result.link);
+                return canonicalUrl && !existingSourceUris.has(canonicalUrl);
+            });
+            
+            if (newRetryResults.length === 0) {
+                 throw new Error("Workflow failed at Step 2: Search returned no new results, even after retry.");
+            }
+            initialSearchResults = newRetryResults; // Use the deduplicated retry results
+        } else {
+            initialSearchResults = newSearchResults; // Use the deduplicated initial results
+        }
+
+
+        // Step 3: Rank New Search Results
+        runtime.logEvent(\`[Workflow] Step 3: Ranking \${initialSearchResults.length} new sources...\`);
         const rankResult = await runtime.tools.run('Rank Search Results', { searchResults: initialSearchResults, researchObjective });
         const rankedSearchResults = rankResult.rankedResults;
         
-        // Step 4: Iterative Processing
-        runtime.logEvent(\`[Workflow] Step 4: Starting iterative analysis of \${rankedSearchResults.length} sources...\`);
-        const validatedSources = [];
+        // Step 4: Iterative Processing of New Sources
+        runtime.logEvent(\`[Workflow] Step 4: Starting iterative analysis of \${rankedSearchResults.length} new sources...\`);
+        const newlyValidatedSources = [];
         const allFoundSynergies = [];
         let dossiersGenerated = 0;
 
@@ -329,12 +357,12 @@ export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
                     runtime.logEvent(\`[Workflow] -> Source deemed unreliable or failed validation. Skipping.\`);
                     continue;
                 }
-                validatedSources.push(validatedSource);
+                newlyValidatedSources.push(validatedSource);
 
                 const analysisResult = await runtime.tools.run('Analyze Single Source for Synergies', { 
                     sourceToAnalyze: validatedSource, 
                     researchObjective, 
-                    metaAnalyses: validatedSources.filter(s => s.isMeta)
+                    metaAnalyses: [...existingSources, ...newlyValidatedSources].filter(s => s.isMeta)
                 });
 
                 const newSynergies = analysisResult.synergies || [];
@@ -348,7 +376,7 @@ export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
                         runtime.logEvent(\`[Workflow] -> ⭐ Exceptional synergy found! Generating dossier immediately...\`);
                         await runtime.tools.run('Generate Proposal for Single Synergy', { 
                             synergy: bestSynergyFromSource, 
-                            backgroundSources: validatedSources 
+                            backgroundSources: [...existingSources, ...newlyValidatedSources]
                         });
                         dossiersGenerated++;
                     }
@@ -357,15 +385,16 @@ export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
                 runtime.logEvent(\`[Workflow] -> ❌ Error processing source: \${e.message}\`);
             }
         }
-
-        if (validatedSources.length === 0) {
+        
+        const totalValidatedSources = existingSources.length + newlyValidatedSources.length;
+        if (totalValidatedSources === 0) {
             throw new Error("Workflow failed: No reliable sources could be validated from the search results.");
         }
-        if (allFoundSynergies.length === 0) {
-             runtime.logEvent("[Workflow] ⚠️ WARNING: Analysis complete, but no synergies were found.");
+        if (allFoundSynergies.length === 0 && newlyValidatedSources.length > 0) {
+             runtime.logEvent("[Workflow] ⚠️ WARNING: Analysis of new sources complete, but no new synergies were found.");
         }
 
-        const finalSummary = \`Workflow completed. Processed \${rankedSearchResults.length} sources, validated \${validatedSources.length}, and found \${allFoundSynergies.length} potential synergies. Generated \${dossiersGenerated} high-priority dossiers.\`;
+        const finalSummary = \`Workflow completed. Processed \${rankedSearchResults.length} new sources, validated \${newlyValidatedSources.length}, and found \${allFoundSynergies.length} new potential synergies. Total knowledge base now contains \${totalValidatedSources} sources.\`;
         runtime.logEvent(\`[Workflow] ✅ \${finalSummary}\`);
         return { success: true, message: "Workflow finished successfully.", summary: finalSummary };
     `

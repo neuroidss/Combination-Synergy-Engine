@@ -8,9 +8,14 @@ import { useSwarmManager } from './useSwarmManager';
 import * as aiService from '../services/aiService';
 import * as searchService from '../services/searchService';
 import * as embeddingService from '../services/embeddingService';
+import { ModelProvider } from '../types';
 import type { AIToolCall, EnrichedAIResponse, LLMTool, MainView, ToolCreatorPayload, ExecuteActionFunction, SearchResult, AIModel } from '../types';
 
-export const useAppRuntime = () => {
+// FIX: Changed from a const arrow function to a function declaration.
+// This helps TypeScript's type inference by hoisting the function, which can
+// resolve module dependency cycles that cause the hook's return type to be
+// incorrectly inferred as `void`.
+export function useAppRuntime() {
     const stateManager = useAppStateManager();
     const toolManager = useToolManager({ logEvent: stateManager.logEvent });
     const { findRelevantTools } = useToolRelevance({ allTools: toolManager.allTools, logEvent: stateManager.logEvent });
@@ -47,6 +52,8 @@ export const useAppRuntime = () => {
         getState: () => ({
             selectedModel: stateManager.selectedModel,
             apiConfig: stateManager.apiConfig,
+            allSources: stateManager.allSources,
+            ModelProvider, // Expose the enum
         }),
         tools: {
             run: async (toolName: string, args: Record<string, any>): Promise<any> => {
@@ -137,7 +144,17 @@ export const useAppRuntime = () => {
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(toolCall),
                     });
-                    const result = await response.json();
+                    
+                    const responseText = await response.text();
+                    let result;
+                    try {
+                        result = JSON.parse(responseText);
+                    } catch (parseError) {
+                        const error = `Failed to parse JSON response from server. Status: ${response.status}. Response body: ${responseText.substring(0, 500)}`;
+                        log(`[ERROR] ${error}`);
+                        return { toolCall, tool, executionError: error };
+                    }
+                    
                     if (!response.ok) {
                         throw new Error(result.error || `Server responded with status ${response.status}`);
                     }
@@ -156,7 +173,8 @@ export const useAppRuntime = () => {
                 const result = await func(toolCall.arguments, runtimeApi);
                 log(`Tool '${tool.name}' executed successfully.`);
                 return { toolCall, tool, executionResult: result };
-            } catch (e: any) {
+            } catch (e: any)
+                 {
                 const error = `Error in tool '${tool.name}': ${e.message}`;
                 log(`[ERROR] ${error}`);
                 return { toolCall, tool, executionError: e.message };

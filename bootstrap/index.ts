@@ -1,4 +1,5 @@
 
+
 import type { ToolCreatorPayload } from '../types';
 
 import { SERVER_MANAGEMENT_TOOLS } from '../framework/mcp';
@@ -27,16 +28,21 @@ const SYNERGY_FORGE_TOOLS: ToolCreatorPayload[] = [{
         { name: 'liveFeed', type: 'array', description: 'The unified feed of all results.', required: true },
         { name: 'setLiveFeed', type: 'object', description: 'Function to update the liveFeed.', required: true },
         { name: 'eventLog', type: 'array', description: 'The global event log.', required: true },
-        { name: 'availableModels', type: 'array', description: 'Array of available AI models.', required: true },
+        { name: 'availableModels', type: 'array', description: 'Array of available static AI models.', required: true },
         { name: 'selectedModel', type: 'object', description: 'The currently selected AI model.', required: true },
         { name: 'setSelectedModel', type: 'object', description: 'Function to update the selected model.', required: true },
         { name: 'apiConfig', type: 'object', description: 'The API configuration.', required: true },
         { name: 'setApiConfig', type: 'object', description: 'Function to update the API configuration.', required: true },
         { name: 'taskPrompt', type: 'string', description: 'The research objective prompt.', required: true },
         { name: 'setTaskPrompt', type: 'object', description: 'Function to update the prompt.', required: true },
+        // New props for dynamic model fetching
+        { name: 'ollamaModels', type: 'array', description: 'Array of dynamically fetched Ollama models.', required: true },
+        { name: 'ollamaState', type: 'object', description: 'State of the Ollama model fetching process.', required: true },
+        { name: 'fetchOllamaModels', type: 'object', description: 'Function to fetch models from Ollama.', required: true },
     ],
     implementationCode: `
 
+const { ModelProvider } = runtime.getState(); // Assuming ModelProvider is exposed
 const { DossierCard, SynergyCard, HypothesisCard, SourceCard, CardComponent } = React.useMemo(() => {
     const InterventionTypeIcon = ({ type }) => {
         const typeMap = {
@@ -367,6 +373,37 @@ const { DossierCard, SynergyCard, HypothesisCard, SourceCard, CardComponent } = 
 const [progressInfo, setProgressInfo] = React.useState({ step: 0, total: 0, message: '', eta: 0 });
 const taskStartTime = React.useRef(null);
 const lastHistoryLength = React.useRef(0);
+// State for dynamic model selection UI
+const [selectedProvider, setSelectedProvider] = React.useState(selectedModel.provider);
+const [customModelId, setCustomModelId] = React.useState('');
+
+// Fetch Ollama models on mount
+React.useEffect(() => {
+    fetchOllamaModels();
+}, []);
+
+// Effect to handle switching between providers and custom inputs
+React.useEffect(() => {
+    // When provider changes, select the first available model for that provider
+    if (selectedProvider === 'GoogleAI') {
+        const googleModel = availableModels.find(m => m.provider === 'GoogleAI');
+        if (googleModel) setSelectedModel(googleModel);
+    } else if (selectedProvider === 'Ollama' && ollamaModels.length > 0) {
+        setSelectedModel(ollamaModels[0]);
+    } else if (selectedProvider === 'HuggingFace') {
+        const hfModel = availableModels.find(m => m.provider === 'HuggingFace');
+        if (hfModel) setSelectedModel(hfModel);
+    } else if (selectedProvider === 'Ollama' || selectedProvider === 'OpenAI_API') {
+        // For providers that use custom input, if there's a typed ID, create a model object
+        if (customModelId.trim()) {
+            const model = { id: customModelId.trim(), name: customModelId.trim(), provider: selectedProvider };
+            setSelectedModel(model);
+        } else {
+             // If input is empty, maybe select a default or do nothing
+        }
+    }
+}, [selectedProvider, customModelId, ollamaModels, availableModels]);
+
 
 React.useEffect(() => {
     if (liveSwarmHistory.length < lastHistoryLength.current) {
@@ -384,7 +421,6 @@ React.useEffect(() => {
                 const data = h.executionResult[resultKey];
                 const id = idBuilder(data);
                 const existing = feedMap.get(id);
-                // Update if it doesn't exist or if the new one has a better score
                 if (!existing || (data.trialPriorityScore || 0) > (existing.data.trialPriorityScore || 0)) {
                     feedMap.set(id, { id, type, data, timestamp: Date.now() });
                 }
@@ -431,8 +467,7 @@ React.useEffect(() => {
 
 const handleStart = () => {
     if (taskPrompt.trim()) {
-        runtime.logEvent('[SYSTEM] New research objective. Resetting workspace.');
-        setLiveFeed([]);
+        runtime.logEvent('[SYSTEM] New research objective. Starting swarm...');
         taskStartTime.current = Date.now();
         setProgressInfo({ step: 0, total: 1, message: 'Initiating workflow...', eta: 0 });
         startSwarmTask({ 
@@ -445,7 +480,6 @@ const handleStart = () => {
 
 const topDossiers = React.useMemo(() => {
     const dossiers = liveFeed.filter(item => item.type === 'dossier');
-    // Attach the best matching synergy score to each dossier for display
     dossiers.forEach(dossier => {
         const comboKey = dossier.data.combination.map(c => c.name).sort().join('+');
         const matchingSynergies = liveFeed.filter(item => item.type === 'synergy' && item.id.includes(comboKey));
@@ -459,6 +493,121 @@ const topDossiers = React.useMemo(() => {
 
 const discoveryFeed = React.useMemo(() => liveFeed.filter(item => item.type !== 'dossier'), [liveFeed]);
 
+const googleModels = React.useMemo(() => availableModels.filter(m => m.provider === 'GoogleAI'), [availableModels]);
+const wllamaModels = React.useMemo(() => availableModels.filter(m => m.provider === 'Wllama'), [availableModels]);
+const hfModels = React.useMemo(() => availableModels.filter(m => m.provider === 'HuggingFace'), [availableModels]);
+
+const renderProviderConfig = () => {
+    const commonInputClasses = "w-full mt-1 bg-slate-800 border border-slate-600 rounded-lg p-2 text-sm";
+    const commonLabelClasses = "text-sm font-semibold text-slate-300";
+    
+    switch (selectedProvider) {
+        case 'GoogleAI':
+            return (
+                <div className="space-y-3">
+                    <div>
+                        <label htmlFor="google-api-key" className={commonLabelClasses}>Google AI API Key:</label>
+                        <input id="google-api-key" type="password" placeholder="Enter your Gemini API Key..."
+                            value={apiConfig.googleAIAPIKey || ''}
+                            onChange={(e) => setApiConfig(c => ({...c, googleAIAPIKey: e.target.value}))}
+                            className={commonInputClasses} autoComplete="off"
+                        />
+                    </div>
+                    <div>
+                        <label htmlFor="google-model-selector" className={commonLabelClasses}>AI Model:</label>
+                        <select id="google-model-selector" value={selectedModel.id} onChange={(e) => {
+                            const model = googleModels.find(m => m.id === e.target.value);
+                            if (model) setSelectedModel(model);
+                        }} className={commonInputClasses}>
+                            {googleModels.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
+                        </select>
+                    </div>
+                </div>
+            );
+        case 'Ollama':
+            return (
+                 <div className="space-y-3">
+                    <div>
+                        <label htmlFor="ollama-host" className={commonLabelClasses}>Ollama Host URL:</label>
+                        <input id="ollama-host" type="text" placeholder="http://localhost:11434"
+                            value={apiConfig.ollamaHost || ''}
+                            onChange={(e) => setApiConfig(c => ({...c, ollamaHost: e.target.value}))}
+                            className={commonInputClasses}
+                        />
+                    </div>
+                    <div>
+                        <label className={commonLabelClasses}>AI Model:</label>
+                        <div className="flex items-center gap-2 mt-1">
+                            { (ollamaState.error || ollamaModels.length === 0) && !ollamaState.loading &&
+                                <input type="text" placeholder="Enter Ollama model ID..." value={customModelId} onChange={e => setCustomModelId(e.target.value)} className={commonInputClasses + ' mt-0'} />
+                            }
+                            { !ollamaState.error && ollamaModels.length > 0 &&
+                                 <select value={selectedModel.id} onChange={(e) => {
+                                    const model = ollamaModels.find(m => m.id === e.target.value);
+                                    if (model) setSelectedModel(model);
+                                }} className={commonInputClasses + ' mt-0'}>
+                                    {ollamaModels.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
+                                </select>
+                            }
+                            <button onClick={fetchOllamaModels} disabled={ollamaState.loading} className="p-2 bg-slate-700 rounded-lg hover:bg-slate-600 disabled:opacity-50 flex-shrink-0">
+                                {ollamaState.loading ? 
+                                    <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                                    : <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h5M20 20v-5h-5M20 4h-5v5M4 20h5v-5" /></svg>
+                                }
+                            </button>
+                        </div>
+                         {ollamaState.error && <p className="text-xs text-red-400 mt-1">{ollamaState.error}</p>}
+                    </div>
+                </div>
+            );
+         case 'OpenAI_API':
+            return (
+                 <div className="space-y-3">
+                    <div>
+                        <label htmlFor="openai-base-url" className={commonLabelClasses}>API Base URL:</label>
+                        <input id="openai-base-url" type="text" placeholder="http://localhost:11434/v1"
+                            value={apiConfig.openAIBaseUrl || ''}
+                            onChange={(e) => setApiConfig(c => ({...c, openAIBaseUrl: e.target.value}))}
+                            className={commonInputClasses}
+                        />
+                    </div>
+                     <div>
+                        <label htmlFor="openai-api-key" className={commonLabelClasses}>API Key:</label>
+                        <input id="openai-api-key" type="password" placeholder="Enter your API Key..."
+                            value={apiConfig.openAIAPIKey || ''}
+                            onChange={(e) => setApiConfig(c => ({...c, openAIAPIKey: e.target.value}))}
+                            className={commonInputClasses} autoComplete="off"
+                        />
+                    </div>
+                    <div>
+                        <label htmlFor="openai-model-id" className={commonLabelClasses}>Model ID:</label>
+                        <input id="openai-model-id" type="text" placeholder="e.g., gemma2:9b" value={customModelId} onChange={e => setCustomModelId(e.target.value)} className={commonInputClasses} />
+                    </div>
+                 </div>
+            );
+        case 'HuggingFace':
+            return (
+                <div className="space-y-3">
+                    <div>
+                        <label htmlFor="hf-model-selector" className={commonLabelClasses}>AI Model:</label>
+                        <select id="hf-model-selector" value={selectedModel.id} onChange={(e) => {
+                            const model = hfModels.find(m => m.id === e.target.value);
+                            if (model) setSelectedModel(model);
+                        }} className={commonInputClasses}>
+                            {hfModels.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
+                        </select>
+                    </div>
+                    <p className="text-xs text-slate-400">
+                        Models run directly in your browser via Transformers.js. The first-time model load may be slow as files are downloaded and cached.
+                    </p>
+                </div>
+            );
+        default:
+            return null;
+    }
+};
+
+
 return (
     <div className="h-full w-full flex bg-slate-900 text-slate-200 font-sans overflow-hidden">
         {/* Left Column: Controls */}
@@ -467,22 +616,29 @@ return (
                 <h1 className="text-3xl font-bold text-cyan-400 animate-text bg-gradient-to-r from-cyan-400 via-purple-400 to-amber-400 bg-clip-text text-transparent">SynergyForge</h1>
                 <p className="text-base text-slate-400">Investor Proposal Engine</p>
             </div>
-            <div className="flex flex-col gap-3 bg-black/30 p-4 rounded-lg border border-slate-800">
-                <label htmlFor="task-prompt" className="font-semibold text-slate-300">Research Objective:</label>
-                <textarea id="task-prompt" value={taskPrompt} onChange={(e) => setTaskPrompt(e.target.value)} className="w-full bg-slate-800 border border-slate-600 rounded-lg p-2 text-sm resize-none focus:ring-2 focus:ring-cyan-500" rows={4} placeholder="e.g., Discover novel synergistic treatments for Alzheimer's..." />
+            <div className="flex flex-col gap-4 bg-black/30 p-4 rounded-lg border border-slate-800">
                 <div>
-                    <label htmlFor="model-selector" className="text-sm font-semibold text-slate-300">AI Model:</label>
-                    <select id="model-selector" value={selectedModel.id + '|' + selectedModel.provider}
-                        onChange={(e) => {
-                            const [id, provider] = e.target.value.split('|');
-                            const model = availableModels.find(m => m.id === id && m.provider === provider);
-                            if (model) setSelectedModel(model);
-                        }}
+                    <label htmlFor="task-prompt" className="font-semibold text-slate-300">Research Objective:</label>
+                    <textarea id="task-prompt" value={taskPrompt} onChange={(e) => setTaskPrompt(e.target.value)} className="w-full mt-1 bg-slate-800 border border-slate-600 rounded-lg p-2 text-sm resize-none focus:ring-2 focus:ring-cyan-500" rows={4} placeholder="e.g., Discover novel synergistic treatments for Alzheimer's..." />
+                </div>
+                
+                <div>
+                    <label htmlFor="provider-selector" className="font-semibold text-slate-300">AI Provider:</label>
+                    <select id="provider-selector" value={selectedProvider}
+                        onChange={(e) => setSelectedProvider(e.target.value)}
                         className="w-full mt-1 bg-slate-800 border border-slate-600 rounded-lg p-2 text-sm"
                     >
-                        {availableModels.map(model => <option key={model.id + '|' + model.provider} value={model.id + '|' + model.provider}>{model.name} ({model.provider})</option>)}
+                        <option value="GoogleAI">Google AI (Gemini)</option>
+                        <option value="Ollama">Ollama (Local)</option>
+                        <option value="OpenAI_API">OpenAI-compatible</option>
+                        <option value="HuggingFace">HuggingFace (Browser)</option>
                     </select>
                 </div>
+                
+                <div className="p-3 bg-slate-900/50 rounded-lg border border-slate-700/50">
+                    {renderProviderConfig()}
+                </div>
+
                 <div className="mt-2">
                     <button onClick={handleStart} disabled={isSwarmRunning || !taskPrompt.trim()} className="w-full bg-gradient-to-r from-amber-600 to-yellow-600 hover:from-amber-500 text-white font-bold py-3 px-4 rounded-lg disabled:from-slate-700 disabled:text-slate-400 disabled:cursor-not-allowed text-lg">
                         {isSwarmRunning ? 'Generating...' : 'Generate Proposals'}

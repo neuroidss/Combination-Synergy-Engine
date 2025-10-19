@@ -6,6 +6,7 @@ import type { APIConfig, LLMTool, AIResponse, AIToolCall } from '../types';
 let generator: TextGenerationPipeline | null = null;
 let currentModelId: string | null = null;
 let currentDevice: string | null = null;
+let isInitializing = false;
 
 const handleProgress = (onProgress: (message: string) => void = () => {}) => {
     const reportedDownloads = new Set();
@@ -19,48 +20,76 @@ const handleProgress = (onProgress: (message: string) => void = () => {}) => {
 };
 
 const getPipeline = async (modelId: string, onProgress: (message: string) => void = () => {}): Promise<TextGenerationPipeline> => {
+    while (isInitializing) {
+        onProgress('[HF] Waiting for another model to finish loading...');
+        await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+
     const [repoId, quantization] = modelId.split('|');
     const dtype = quantization || 'auto';
-
-    // In this simplified version, device is hardcoded, but can be expanded via a config.
-    const huggingFaceDevice = 'webgpu'; 
-
-    // The key for the cache now includes the quantization type
     const uniqueModelKey = `${repoId}|${dtype}`;
 
-    if (generator && currentModelId === uniqueModelKey && currentDevice === huggingFaceDevice) {
+    // A device preference is not stored because a more powerful device might become available (e.g., user enables a flag).
+    // We only store failure of the preferred device for the session.
+    if (generator && currentModelId === uniqueModelKey) {
         return generator;
     }
 
-    onProgress(`🚀 Initializing model: ${repoId} (Quantization: ${dtype}). This may take a few minutes...`);
+    isInitializing = true;
     
-    if (generator) {
-        await generator.dispose();
-        generator = null;
+    try {
+        if (generator) {
+            await generator.dispose();
+            generator = null;
+            currentModelId = null;
+            currentDevice = null;
+        }
+
+        (window as any).env = (window as any).env || {};
+        (window as any).env.allowLocalModels = false;
+        (window as any).env.useFbgemm = false;
+        
+        const webgpuFailedPreviously = sessionStorage.getItem('hf_webgpu_failed') === 'true';
+        let newGenerator: TextGenerationPipeline | null = null;
+        let deviceUsed = '';
+
+        if (!webgpuFailedPreviously) {
+            try {
+                onProgress(`🚀 Attempting to load model via WebGPU: ${repoId} (Quantization: ${dtype})...`);
+                const pipelineOptions = { device: 'webgpu', progress_callback: handleProgress(onProgress), dtype };
+                // @ts-ignore
+                newGenerator = await pipeline('text-generation', repoId, pipelineOptions as any) as TextGenerationPipeline;
+                deviceUsed = 'webgpu';
+                onProgress(`✅ Model loaded successfully on WebGPU.`);
+            } catch (e) {
+                onProgress(`[WARN] ⚠️ WebGPU initialization failed: ${e instanceof Error ? e.message : String(e)}. Falling back to CPU (WASM)...`);
+                sessionStorage.setItem('hf_webgpu_failed', 'true');
+            }
+        } else {
+             onProgress(`[INFO] Skipping WebGPU because it failed previously in this session.`);
+        }
+        
+        if (!newGenerator) {
+             try {
+                onProgress(`🚀 Loading model via CPU (WASM): ${repoId} (Quantization: ${dtype}). This may be slower.`);
+                const pipelineOptions = { device: 'wasm', progress_callback: handleProgress(onProgress), dtype };
+                // @ts-ignore
+                newGenerator = await pipeline('text-generation', repoId, pipelineOptions as any) as TextGenerationPipeline;
+                deviceUsed = 'wasm';
+                onProgress(`✅ Model loaded successfully on CPU (WASM).`);
+            } catch (e) {
+                const finalError = new Error(`Critical Error: Could not load model on either WebGPU or CPU. ${e instanceof Error ? e.message : String(e)}`);
+                throw finalError;
+            }
+        }
+        
+        generator = newGenerator;
+        currentModelId = uniqueModelKey;
+        currentDevice = deviceUsed;
+        return generator;
+    } finally {
+        isInitializing = false;
     }
-
-    (window as any).env = (window as any).env || {};
-    (window as any).env.allowLocalModels = false;
-    (window as any).env.useFbgemm = false;
-    
-    // The options for the pipeline. Using the parsed dtype.
-    const pipelineOptions = {
-        device: huggingFaceDevice,
-        progress_callback: handleProgress(onProgress),
-        dtype: dtype,
-    };
-    
-    // By casting the options argument to 'any' at the call site, we prevent TypeScript from creating
-    // a massive union type from all the pipeline() overloads, which was causing a "type is too complex" error.
-    // This is a necessary workaround for a known issue with the transformers.js library's complex types.
-    // @ts-ignore
-    generator = await pipeline('text-generation', repoId, pipelineOptions as any) as TextGenerationPipeline;
-
-    currentModelId = uniqueModelKey;
-    currentDevice = huggingFaceDevice;
-    
-    onProgress(`✅ Model ${repoId} (${dtype}) loaded successfully.`);
-    return generator;
 };
 
 const executePipe = async (pipe: TextGenerationPipeline, system: string, user:string, temp: number): Promise<string> => {
@@ -99,10 +128,14 @@ const generate = async (system: string, user: string, modelId: string, temperatu
      const [repoId] = modelId.split('|');
      try {
         const pipe = await getPipeline(modelId, onProgress);
+        onProgress('🤖 Generating response with HuggingFace model...');
         const responseText = await executePipe(pipe, system, user, temperature);
+        onProgress('✅ Response generated.');
         return responseText;
     } catch (e) {
-        throw generateDetailedError(e, repoId);
+        const err = generateDetailedError(e, repoId)
+        onProgress(`[ERROR] ❌ HuggingFace generation failed: ${err.message}`);
+        throw err;
     }
 };
 

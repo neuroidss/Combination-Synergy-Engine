@@ -25,10 +25,17 @@ export const SERVER_MANAGEMENT_TOOLS: ToolCreatorPayload[] = [
           const response = await fetch('http://localhost:3001/api/files/write', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ filePath: args.filePath, content: args.content, baseDir: args.baseDir || (args.filePath.endsWith('.py') || args.filePath.endsWith('.ts') ? 'scripts' : 'assets') }),
+              body: JSON.stringify({ filePath: args.filePath, content: args.content, baseDir: args.filePath.endsWith('.py') || args.filePath.endsWith('.ts') ? 'scripts' : 'assets' }),
           });
           
-          const result = await response.json();
+          const responseText = await response.text();
+          let result;
+          try {
+              result = JSON.parse(responseText);
+          } catch (e) {
+              throw new Error(\`Failed to parse JSON response from server for file write. Status: \${response.status}. Response: \${responseText.substring(0, 500)}\`);
+          }
+          
           if (!response.ok) {
               throw new Error(result.error || \`Server responded with status \${response.status}\`);
           }

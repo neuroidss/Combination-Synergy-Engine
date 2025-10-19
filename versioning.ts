@@ -85,7 +85,7 @@ export const loadMapStateToStorage = (logEvent: (msg: string) => void): Omit<Map
     }
 };
 
-export const saveMapStateToStorage = (partialState: Partial<Omit<MapState, 'version'>>, logEvent: (msg: string) => void) => {
+export function saveMapStateToStorage(partialState: Partial<Omit<MapState, 'version'>>, logEvent: (msg: string) => void) {
     if (!partialState.allSources || partialState.allSources.length === 0) {
         // Don't save an empty map state.
         return;
@@ -110,4 +110,4 @@ export const saveMapStateToStorage = (partialState: Partial<Omit<MapState, 'vers
         logEvent(`[SYSTEM] ERROR: Failed to save map state to localStorage. Data may be too large. Error: ${e instanceof Error ? e.message : String(e)}`);
         console.error("Failed to save map state to localStorage:", e);
     }
-};
+}

@@ -6,11 +6,17 @@ import type { APIConfig, LLMTool, AIResponse, AIToolCall, ScoredTool } from "../
 const geminiInstances: Map<string, GoogleGenAI> = new Map();
 
 const getGeminiInstance = (apiKey: string): GoogleGenAI => {
+    if (!apiKey) {
+        throw new Error("Google Gemini API key is missing.");
+    }
     if (!geminiInstances.has(apiKey)) {
         geminiInstances.set(apiKey, new GoogleGenAI({ apiKey }));
     }
     return geminiInstances.get(apiKey)!;
 };
+
+// Helper function to identify Gemma models, which require a different approach for tool calling.
+const isGemmaModel = (modelId: string): boolean => modelId.startsWith('gemma-');
 
 const sanitizeToolName = (name: string): string => {
     return name.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -103,19 +109,54 @@ export const generateWithTools = async (
     userInput: string,
     systemInstruction: string,
     modelId: string,
-    apiConfig: APIConfig,
+    apiKey: string,
     tools: LLMTool[],
     files: { type: string, data: string }[] = []
 ): Promise<AIResponse> => {
-    const apiKey = apiConfig.googleAIAPIKey;
-    if (!apiKey) throw new Error("Google AI API Key is missing.");
-
     const ai = getGeminiInstance(apiKey);
-    const geminiTools = buildGeminiTools(tools);
-    
     const toolNameMap = new Map(tools.map(t => [sanitizeToolName(t.name), t.name]));
     tools.forEach(tool => toolNameMap.set(tool.name, tool.name));
 
+    // --- GEMMA-SPECIFIC PATH (PROMPT-BASED TOOLING) ---
+    // This path is used for models like Gemma that don't support native function calling.
+    if (isGemmaModel(modelId)) {
+        console.log(`[Gemini Service] Using prompt-based tool emulation for Gemma model: ${modelId}`);
+        
+        const toolDescriptions = tools.map(tool => {
+            const params = tool.parameters.map(p => `  - ${p.name} (${p.type}): ${p.description}${p.required ? ' (required)' : ''}`).join('\n');
+            return `Tool: "${tool.name}"\nDescription: ${tool.description}\nParameters:\n${params}`;
+        }).join('\n\n');
+
+        const toolInstruction = `You are a helpful assistant that has access to the following tools. To use a tool, you MUST respond with ONLY a single JSON object (or an array of objects for multiple calls) in a \`\`\`json block. Do not add any other text or explanation.
+Your response format for a tool call MUST be:
+\`\`\`json
+[
+  {
+    "name": "tool_name_to_call",
+    "arguments": { "arg1": "value1", "arg2": "value2" }
+  }
+]
+\`\`\`
+
+AVAILABLE TOOLS:
+${toolDescriptions}`;
+
+        const fullPrompt = `${systemInstruction}\n\n${toolInstruction}\n\nUSER'S TASK:\n${userInput}`;
+        
+        // Gemma models do not support the 'config' object with 'systemInstruction' or 'tools'.
+        const response: GenerateContentResponse = await ai.models.generateContent({
+            model: modelId,
+            contents: { parts: buildParts(fullPrompt, files), role: 'user' },
+        });
+
+        // For Gemma, we can only rely on parsing the text response.
+        const toolCalls = parseToolCallFromText(response.text, toolNameMap);
+        
+        return { toolCalls, text: response.text };
+    }
+
+    // --- GEMINI-SPECIFIC PATH (NATIVE TOOLING) ---
+    const geminiTools = buildGeminiTools(tools);
     const fallbackInstruction = `\n\nIf you cannot use the provided functions, you MUST respond with ONLY a JSON object (or an array of objects) in a \`\`\`json block, with the format: [{"name": "tool_name", "arguments": {"arg1": "value1"}}]`;
     const fullSystemInstruction = systemInstruction + fallbackInstruction;
 
@@ -135,9 +176,13 @@ export const generateWithTools = async (
         const parsedArgs = { ...fc.args };
         if (toolDefinition) {
             for (const param of toolDefinition.parameters) {
-                if ((param.type === 'array' || param.type === 'object') && typeof parsedArgs[param.name] === 'string') {
+                // FIX: Store the argument value in a temporary variable.
+                // This helps TypeScript's control flow analysis correctly narrow the type
+                // of `argValue` to a string within the `if` block, resolving the error.
+                const argValue = parsedArgs[param.name];
+                if ((param.type === 'array' || param.type === 'object') && typeof argValue === 'string') {
                     try {
-                        parsedArgs[param.name] = JSON.parse(parsedArgs[param.name]);
+                        parsedArgs[param.name] = JSON.parse(argValue);
                     } catch (e) {
                         console.warn(`[Gemini Service] Failed to parse JSON string for argument '${param.name}' in tool '${originalName}'. Leaving as string. Error: ${e}`);
                     }
@@ -168,14 +213,24 @@ export const generateText = async (
     userInput: string,
     systemInstruction: string,
     modelId: string,
-    apiConfig: APIConfig,
+    apiKey: string,
     files: { type: string, data: string }[] = []
 ): Promise<string> => {
-    const apiKey = apiConfig.googleAIAPIKey;
-    if (!apiKey) throw new Error("Google AI API Key is missing.");
-
     const ai = getGeminiInstance(apiKey);
     
+    // --- GEMMA-SPECIFIC PATH ---
+    // Gemma models do not support systemInstruction, so we prepend it to the user prompt.
+    if (isGemmaModel(modelId)) {
+        console.log(`[Gemini Service] Using prompt concatenation for Gemma model text generation: ${modelId}`);
+        const fullPrompt = `${systemInstruction}\n\n${userInput}`;
+        const response = await ai.models.generateContent({
+            model: modelId,
+            contents: { parts: buildParts(fullPrompt, files), role: 'user' },
+        });
+        return response.text;
+    }
+    
+    // --- GEMINI-SPECIFIC PATH ---
     const response = await ai.models.generateContent({
         model: modelId,
         contents: { parts: buildParts(userInput, files), role: 'user' },
@@ -187,12 +242,9 @@ export const generateText = async (
 
 export const contextualizeWithSearch = async (
     prompt: { text: string; files: any[] },
-    apiConfig: APIConfig,
+    apiKey: string,
     modelId: string
 ): Promise<{ summary: string; sources: { title: string; uri: string }[] }> => {
-    const apiKey = apiConfig.googleAIAPIKey;
-    if (!apiKey) throw new Error("Google AI API Key is missing for search.");
-
     const ai = getGeminiInstance(apiKey);
     const response = await ai.models.generateContent({
         model: modelId,

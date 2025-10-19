@@ -1,4 +1,5 @@
 
+
 import type { ToolCreatorPayload } from '../types';
 
 export const DIAGNOSTIC_TOOLS: ToolCreatorPayload[] = [
@@ -42,7 +43,6 @@ export const DIAGNOSTIC_TOOLS: ToolCreatorPayload[] = [
 
 4.  **Final Output:** You MUST call the 'RecordErrorAnalysis' tool with your complete, structured analysis. Your entire response must be ONLY this single tool call.\`;
 
-            // FIX: Replaced nested template literal with string concatenation to prevent parsing errors.
             const prompt = '## FAILURE CONTEXT ##\\n\\n' +
                 '**High-Level Objective:**\\n' + researchObjective + '\\n\\n' +
                 '**Execution History (Simplified):**\\n' + executionHistory + '\\n\\n' +
@@ -66,11 +66,19 @@ export const DIAGNOSTIC_TOOLS: ToolCreatorPayload[] = [
                 // The model override has been removed. The tool will now use the currently selected model.
                 const aiResponse = await runtime.ai.processRequest(prompt, systemInstruction, [recordTool], []);
                 
-                if (!aiResponse || !aiResponse.toolCalls || !aiResponse.toolCalls.length === 0) {
-                    throw new Error("The diagnostic AI failed to call the 'RecordErrorAnalysis' tool as instructed.");
+                if (!aiResponse?.toolCalls?.length) {
+                    let analysis = "The diagnostic AI failed to call the 'RecordErrorAnalysis' tool as instructed.";
+                    if (aiResponse?.text) {
+                        analysis += \` AI's textual response was: "\${aiResponse.text.trim()}"\`;
+                    }
+                    throw new Error(analysis);
                 }
                 
                 const analysisCall = aiResponse.toolCalls[0];
+                if (analysisCall.name !== 'RecordErrorAnalysis') {
+                    throw new Error(\`The diagnostic AI called the wrong tool: '\${analysisCall.name}'. Expected 'RecordErrorAnalysis'.\`);
+                }
+
                 // Execute the recording tool call to log the analysis.
                 const analysisResult = await runtime.tools.run(analysisCall.name, analysisCall.arguments);
 

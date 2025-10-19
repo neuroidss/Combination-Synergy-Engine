@@ -1,6 +1,6 @@
 // VIBE_NOTE: Do not escape backticks or dollar signs in template literals in this file.
 // Escaping is only for 'implementationCode' strings in tool definitions.
-import React, { useMemo, Component } from 'react';
+import React, { useMemo } from 'react';
 import type { LLMTool, UIToolRunnerProps } from '../types';
 import DebugLogView from './ui_tools/DebugLogView';
 import * as Icons from './icons';
@@ -24,12 +24,8 @@ type ErrorBoundaryState = {
   hasError: boolean;
 };
 
-// FIX: Corrected the ErrorBoundary class to properly extend React.Component.
-// The previous implementation was not being recognized as a valid React component,
-// leading to errors about missing 'props', 'state', and 'setState'. This ensures
-// the class has the correct inheritance and lifecycle properties.
-// FIX: By extending Component directly, we resolve potential TypeScript resolution errors where it might fail to see the class as a valid React Component.
-class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+// FIX: The ErrorBoundary class now extends React.Component to be a valid React component. This gives it access to state, props, and lifecycle methods, resolving the errors.
+class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
   constructor(props: ErrorBoundaryProps) {
     super(props);
     this.state = { hasError: false };

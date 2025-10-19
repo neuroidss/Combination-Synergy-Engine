@@ -190,6 +190,23 @@ app.post('/api/tools/create', async (req, res) => {
     }
 });
 
+// New endpoint to proxy requests to the local Ollama server
+app.get('/api/ollama-proxy/tags', async (req, res) => {
+    const ollamaHost = 'http://localhost:11434'; // The MCP server can always talk to the default Ollama host
+    console.log(`[Ollama Proxy] Forwarding /api/tags request to ${ollamaHost}`);
+    try {
+        const response = await fetch(`${ollamaHost}/api/tags`, {
+             signal: AbortSignal.timeout(5000) // 5 second timeout
+        });
+        const data = await response.json();
+        res.status(response.status).json(data);
+    } catch (e) {
+        const error = e as Error;
+        console.error(`[Ollama Proxy] Error connecting to Ollama: ${error.message}`);
+        res.status(502).json({ error: `Failed to connect to the Ollama server at ${ollamaHost}. Is it running? Details: ${error.message}` });
+    }
+});
+
 app.post('/api/browse', async (req, res) => {
     const { url } = req.body;
     if (!url) {

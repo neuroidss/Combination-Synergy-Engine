@@ -12,20 +12,13 @@ export const AI_MODELS: AIModel[] = [
     { id: 'gemini-robotics-er-1.5-preview', name: 'Gemini Robotics-ER 1.5 Preview', provider: ModelProvider.GoogleAI },
     { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', provider: ModelProvider.GoogleAI },
     { id: 'gemini-2.0-flash-lite', name: 'Gemini 2.0 Flash-Lite', provider: ModelProvider.GoogleAI },
-    { id: 'local/gemma-multimodal', name: 'Local Gemma Server', provider: ModelProvider.OpenAI_API },
-    { id: 'hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:IQ2_M', name: 'Qwen3 Coder 30B A3B', provider: ModelProvider.OpenAI_API },
-    { id: 'gemma3:4b', name: 'Gemma 3 4B', provider: ModelProvider.OpenAI_API },
-    { id: 'hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:IQ2_M', name: 'Qwen3 Coder 30B A3B', provider: ModelProvider.Ollama },
-    { id: 'gemma3n:e4b', name: 'Gemma 3N E4B', provider: ModelProvider.Ollama },
-    { id: 'gemma3n:e2b', name: 'Gemma 3N E2B', provider: ModelProvider.Ollama },
-    { id: 'gemma3:4b', name: 'Gemma 3 4B', provider: ModelProvider.Ollama },
-    { id: 'qwen3:14b', name: 'Qwen3 14B', provider: ModelProvider.Ollama },
-    { id: 'qwen3:8b', name: 'Qwen3 8B', provider: ModelProvider.Ollama },
-    { id: 'qwen3:4b', name: 'Qwen3 4B', provider: ModelProvider.Ollama },
-    { id: 'qwen3:1.7b', name: 'Qwen3 1.7B', provider: ModelProvider.Ollama },
-    { id: 'qwen3:0.6b', name: 'Qwen3 0.6B', provider: ModelProvider.Ollama },
-    
-    // Updated HuggingFace models with quantization options
+
+    { id: 'gemma-3n-e2b-it', name: 'Gemma 3n E2B', provider: ModelProvider.GoogleAI },
+    { id: 'gemma-3n-e4b-it', name: 'Gemma 3n E4B', provider: ModelProvider.GoogleAI },
+    { id: 'gemma-3-1b-it', name: 'Gemma 3 1B', provider: ModelProvider.GoogleAI },
+    { id: 'gemma-3-4b-it', name: 'Gemma 3 4B', provider: ModelProvider.GoogleAI },
+    { id: 'gemma-3-12b-it', name: 'Gemma 3 12B', provider: ModelProvider.GoogleAI },
+    { id: 'gemma-3-27b-it', name: 'Gemma 3 27B', provider: ModelProvider.GoogleAI },
     { id: 'onnx-community/Qwen3-0.6B-ONNX|q4f16', name: 'Qwen3-0.6B Q4_F16', provider: ModelProvider.HuggingFace },
     { id: 'onnx-community/Qwen3-0.6B-ONNX|q4', name: 'Qwen3-0.6B Q4', provider: ModelProvider.HuggingFace },
     { id: 'onnx-community/Qwen3-0.6B-ONNX|int8', name: 'Qwen3-0.6B INT8', provider: ModelProvider.HuggingFace },
@@ -33,9 +26,6 @@ export const AI_MODELS: AIModel[] = [
     { id: 'onnx-community/gemma-3n-E2B-it-ONNX|q4', name: 'Gemma-3N-E2B-IT Q4', provider: ModelProvider.HuggingFace },
     { id: 'onnx-community/Qwen3-1.7B-ONNX|q4', name: 'Qwen3-1.7B Q4', provider: ModelProvider.HuggingFace },
     { id: 'onnx-community/Qwen3-4B-ONNX|q4', name: 'Qwen3-4B Q4', provider: ModelProvider.HuggingFace },
-    
-    { id: 'https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-UD-IQ1_S.gguf', name: 'Qwen3 0.6B', provider: ModelProvider.Wllama },
-    { id: 'https://huggingface.co/unsloth/gemma-3-1b-it-GGUF/resolve/main/gemma-3-1b-it-UD-IQ1_S.gguf', name: 'Gemma 3 1B', provider: ModelProvider.Wllama },
 ];
 
 export const SWARM_AGENT_SYSTEM_PROMPT = `You are an expert bioinformatics research assistant.
