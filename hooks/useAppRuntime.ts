@@ -87,6 +87,7 @@ export const useAppRuntime = () => {
             enrichSource: (source: SearchResult, proxyUrl?: string) => searchService.enrichSource(source, stateManager.logEvent, proxyUrl),
             updateProxyList: (newBuilderStrings: string[]) => searchService.updateProxyList(newBuilderStrings),
             getProxyList: () => searchService.getProxyList(),
+            buildCanonicalUrl: searchService.buildCanonicalUrl,
         },
         ai: {
             generateText: (text: string, systemInstruction: string, files: { type: string, data: string }[] = []) => {

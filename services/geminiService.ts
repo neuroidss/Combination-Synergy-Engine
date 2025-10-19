@@ -61,6 +61,44 @@ const buildParts = (userInput: string, files: { type: string; data: string }[]):
     return parts;
 };
 
+const parseToolCallFromText = (text: string, toolNameMap: Map<string, string>): AIToolCall[] | null => {
+    if (!text) return null;
+
+    // Regex to find a JSON block, optionally inside ```json ... ```
+    const jsonRegex = /```json\s*([\s\S]*?)\s*```|({[\s\S]*}|\[[\s\S]*\])/m;
+    const match = text.match(jsonRegex);
+    if (!match) return null;
+
+    const jsonString = match[1] || match[2];
+    if (!jsonString) return null;
+
+    try {
+        let parsedJson = JSON.parse(jsonString);
+        if (!Array.isArray(parsedJson)) {
+            parsedJson = [parsedJson];
+        }
+
+        const toolCalls: AIToolCall[] = [];
+        for (const call of parsedJson) {
+            if (typeof call !== 'object' || call === null) continue;
+
+            const nameKey = Object.keys(call).find(k => k.toLowerCase().includes('name'));
+            const argsKey = Object.keys(call).find(k => k.toLowerCase().includes('arguments'));
+
+            if (nameKey && argsKey && typeof call[nameKey] === 'string' && typeof call[argsKey] === 'object') {
+                const rawName = call[nameKey];
+                const originalName = toolNameMap.get(sanitizeToolName(rawName)) || toolNameMap.get(rawName) || rawName;
+                toolCalls.push({ name: originalName, arguments: call[argsKey] });
+            }
+        }
+        return toolCalls.length > 0 ? toolCalls : null;
+    } catch (e) {
+        console.warn(`[Gemini Service] Fallback tool call parsing failed for JSON string: "${jsonString}"`, e);
+        return null;
+    }
+};
+
+
 export const generateWithTools = async (
     userInput: string,
     systemInstruction: string,
@@ -76,17 +114,21 @@ export const generateWithTools = async (
     const geminiTools = buildGeminiTools(tools);
     
     const toolNameMap = new Map(tools.map(t => [sanitizeToolName(t.name), t.name]));
+    tools.forEach(tool => toolNameMap.set(tool.name, tool.name));
+
+    const fallbackInstruction = `\n\nIf you cannot use the provided functions, you MUST respond with ONLY a JSON object (or an array of objects) in a \`\`\`json block, with the format: [{"name": "tool_name", "arguments": {"arg1": "value1"}}]`;
+    const fullSystemInstruction = systemInstruction + fallbackInstruction;
 
     const response: GenerateContentResponse = await ai.models.generateContent({
         model: modelId,
         contents: { parts: buildParts(userInput, files), role: 'user' },
         config: {
-            systemInstruction,
+            systemInstruction: fullSystemInstruction,
             tools: [{ functionDeclarations: geminiTools }],
         }
     });
 
-    const toolCalls: AIToolCall[] | null = response.functionCalls?.map(fc => {
+    let toolCalls: AIToolCall[] | null = response.functionCalls?.map(fc => {
         const originalName = toolNameMap.get(fc.name) || fc.name;
         
         const toolDefinition = tools.find(t => t.name === originalName);
@@ -108,6 +150,16 @@ export const generateWithTools = async (
             arguments: parsedArgs,
         };
     }) || null;
+
+    // --- FAULT TOLERANCE: FALLBACK LOGIC ---
+    if ((!toolCalls || toolCalls.length === 0) && response.text) {
+        console.log("[Gemini Service] No native function call found. Attempting to parse from text content as a fallback.");
+        const parsedToolCalls = parseToolCallFromText(response.text, toolNameMap);
+        if (parsedToolCalls) {
+            console.log("[Gemini Service] ✅ Successfully parsed tool call from text via fallback.", parsedToolCalls);
+            toolCalls = parsedToolCalls;
+        }
+    }
 
     return { toolCalls, text: response.text };
 };

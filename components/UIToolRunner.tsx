@@ -24,14 +24,19 @@ type ErrorBoundaryState = {
   hasError: boolean;
 };
 
-// FIX: Reverted to using a constructor for state initialization. The class property syntax was causing issues with `this` context, leading to errors where `props` and `setState` were not found.
+// FIX: Made ErrorBoundary a proper React component by extending React.Component.
+// This resolves errors about missing 'props', 'state', and 'setState'.
 class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  // FIX: Added a constructor to properly initialize state. In some build environments,
+  // relying solely on class property initialization for state does not allow TypeScript
+  // to correctly infer the existence of `this.props` and `this.setState` from the base Component class.
   constructor(props: ErrorBoundaryProps) {
     super(props);
     this.state = { hasError: false };
   }
 
   static getDerivedStateFromError(error: any): ErrorBoundaryState {
+    console.error("UI Tool Runner caught an error:", error);
     return { hasError: true };
   }
 

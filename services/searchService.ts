@@ -8,7 +8,7 @@ import type { SearchDataSource, SearchResult } from '../types';
  * @param idOrUrl - The identifier string or a full URL.
  * @returns The canonical URL as a string, or null.
  */
-const buildCanonicalUrl = (idOrUrl: string): string | null => {
+export const buildCanonicalUrl = (idOrUrl: string): string | null => {
     if (!idOrUrl || typeof idOrUrl !== 'string') {
         return null;
     }

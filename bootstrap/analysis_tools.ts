@@ -1,6 +1,60 @@
+
 import type { ToolCreatorPayload } from '../types';
 
 export const ANALYSIS_TOOLS: ToolCreatorPayload[] = [
+    {
+        name: 'ExtractKnownAndHypotheticalSynergies',
+        description: 'Analyzes a scientific article to extract KNOWN synergies mentioned in the text and generate HYPOTHETICAL synergies based on unstated combinations of interventions. Returns a structured list of these potential synergies.',
+        category: 'Functional',
+        executionEnvironment: 'Client',
+        purpose: 'To separate the complex AI-based extraction of synergies from their subsequent scoring and recording, making the workflow more modular and robust.',
+        parameters: [
+            { name: 'sourceToAnalyze', type: 'object', description: 'The single validated source object to be analyzed.', required: true },
+            { name: 'researchObjective', type: 'string', description: 'The original research objective to focus the analysis.', required: true },
+        ],
+        implementationCode: `
+        const { sourceToAnalyze: source, researchObjective } = args;
+        const sourceContext = \`<SOURCE>\\n<TITLE>\${source.title}</TITLE>\\n<RELIABILITY>\${source.reliabilityScore}</RELIABILITY>\\n<SUMMARY>\${source.summary}</SUMMARY>\\n</SOURCE>\`;
+
+        const systemInstruction = \`You are an expert bioinformatics researcher. Your task is to analyze a scientific article to extract both KNOWN and HYPOTHETICAL synergies.
+
+**Analysis Steps:**
+1.  **Extract KNOWN Synergies:** Identify every combination of two or more interventions that are explicitly discussed as being used together in the article.
+2.  **Generate HYPOTHETICAL Synergies:** List all individual interventions mentioned. Then, identify "knowledge gaps" by finding pairs or triplets that are NOT explicitly discussed as a combination. For each promising unstated combination, formulate a novel hypothesis.
+
+**Response Format:**
+- You MUST respond with ONLY a single, valid JSON object.
+- The JSON object must contain a single key "synergies", which is an array of synergy objects.
+- Each synergy object must have the following structure:
+{
+  "combination": [{"name": "Intervention A", "type": "drug"}, {"name": "Intervention B", "type": "behavior"}],
+  "status": "Known" or "Hypothesized (De Novo)",
+  "synergyType": "Synergistic", "Additive", or "Antagonistic",
+  "summary": "For KNOWN, summarize the finding from the paper. For HYPOTHETICAL, provide a plausible scientific rationale.",
+  "potentialRisks": "Describe potential risks of the combination."
+}
+- Do not add any text or markdown outside the JSON object.\`;
+
+        const prompt = \`Based on the research objective "\${researchObjective}" and the following source, identify all potential synergies (both known and hypothetical) and return them as a JSON object.\\n\\nSOURCE TO ANALYZE:\\n\${sourceContext}\`;
+
+        const aiResponseText = await runtime.ai.generateText(prompt, systemInstruction);
+        try {
+            const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
+            if (!jsonMatch) throw new Error("AI did not return a valid JSON object. Raw response: " + aiResponseText);
+            const parsedResult = JSON.parse(jsonMatch[0]);
+
+            if (!parsedResult.synergies || !Array.isArray(parsedResult.synergies)) {
+                 throw new Error("AI response did not contain a 'synergies' array.");
+            }
+            
+            runtime.logEvent(\`[Synergy Extractor] ✅ Extracted \${parsedResult.synergies.length} potential synergies from source.\`);
+            return { success: true, synergies: parsedResult.synergies };
+        } catch(e) {
+            runtime.logEvent(\`[Synergy Extractor] ❌ Error parsing synergies from AI: \${e.message}\`);
+            throw new Error('Failed to parse synergies from AI: ' + e.message + ' Raw response: ' + aiResponseText);
+        }
+    `
+    },
     {
         name: "FindMarketPriceForLabItem",
         description: "Searches a major lab supplier (e.g., Sigma-Aldrich) for a specific lab item (chemical, kit) and attempts to extract its price in USD using web scraping and AI analysis. This tool is designed to be updatable.",
@@ -499,16 +553,26 @@ return { success: true, embeddedSources };
         return { success: true, vectorDB: [] };
     }
     
-    runtime.logEvent(\`[Embedder] Created \${allChunks.length} text chunks. Now generating embeddings...\`);
+    runtime.logEvent(\`[Embedder] Created \${allChunks.length} text chunks. Now generating embeddings in batches...\`);
 
-    // Batch embedding for efficiency
-    const chunkTexts = allChunks.map(c => c.text);
-    const embeddings = await runtime.ai.generateEmbeddings(chunkTexts);
+    const batchSize = 100; // Process in smaller chunks to avoid GPU memory limits
+    const vectorDB = [];
 
-    const vectorDB = allChunks.map((chunk, index) => ({
-        ...chunk,
-        embedding: embeddings[index],
-    }));
+    for (let i = 0; i < allChunks.length; i += batchSize) {
+        const batchChunks = allChunks.slice(i, i + batchSize);
+        const chunkTexts = batchChunks.map(c => c.text);
+        
+        runtime.logEvent(\`[Embedder] ...processing batch \${Math.floor(i/batchSize) + 1} of \${Math.ceil(allChunks.length / batchSize)} (\${batchChunks.length} chunks)\`);
+        
+        const batchEmbeddings = await runtime.ai.generateEmbeddings(chunkTexts);
+        
+        const newEmbeddedEntries = batchChunks.map((chunk, index) => ({
+            ...chunk,
+            embedding: batchEmbeddings[index],
+        }));
+        
+        vectorDB.push(...newEmbeddedEntries);
+    }
 
     runtime.logEvent(\`[Embedder] ✅ Successfully created vector database with \${vectorDB.length} entries.\`);
     return { success: true, vectorDB };
@@ -563,32 +627,31 @@ return { success: true, embeddedSources };
 
     const systemInstruction = \`You are an expert bioinformatics researcher with a talent for synthesizing novel hypotheses from disparate data.
 Your task is to analyze the provided text fragments from multiple scientific papers and formulate a NEW synergistic therapeutic hypothesis that addresses the user's conceptual query.
-Then, you MUST call the 'RecordSynergy' tool to record your finding.
-
-**CRITICAL INSTRUCTIONS for the tool call:**
-1.  **combination**: Propose a specific combination of interventions (drugs, behaviors, etc.).
-2.  **status**: This MUST be set to "Hypothesized (De Novo)".
-3.  **summary**: Clearly explain your novel hypothesis and the scientific rationale based on the provided evidence.
-4.  **potentialRisks**: Extrapolate potential risks based on the mechanisms discussed in the evidence.
-
-Your entire response MUST be a single 'RecordSynergy' tool call. Do not add any other text.\`;
+You MUST respond with ONLY a single, valid JSON object in the following format:
+{
+  "combination": [{"name": "Compound A", "type": "drug"}, {"name": "Lifestyle B", "type": "behavior"}],
+  "summary": "The novel hypothesis is that combining Compound A, which targets pathway X, with Lifestyle B, which enhances process Y, will synergistically reduce Z.",
+  "potentialRisks": "Potential risks include off-target effects of Compound A and adherence issues with Lifestyle B."
+}\`;
     
     const prompt = \`Conceptual Query: "\${conceptualQuery}"\\n\\nRelevant Evidence from Literature:\\n\${contextForSynthesis}\`;
     
-    const recordSynergyTool = runtime.tools.list().find(t => t.name === 'RecordSynergy');
-    if (!recordSynergyTool) throw new Error("Core tool 'RecordSynergy' not found.");
+    const aiResponseText = await runtime.ai.generateText(prompt, systemInstruction);
+    const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
+    if (!jsonMatch) throw new Error("Hypothesis synthesis AI did not return a valid JSON object. Raw: " + aiResponseText);
+    const hypothesisData = JSON.parse(jsonMatch[0]);
 
-    const aiResponse = await runtime.ai.processRequest(prompt, systemInstruction, [recordSynergyTool]);
-    
-    const toolCall = aiResponse?.toolCalls?.[0];
-    if (!toolCall || toolCall.name !== 'RecordSynergy') {
-        let errorMsg = "Hypothesis synthesis AI failed to call 'RecordSynergy' tool.";
-        if (aiResponse && aiResponse.text) errorMsg += \` AI Response: \${aiResponse.text}\`;
-        throw new Error(errorMsg);
+    if (!hypothesisData.combination || !hypothesisData.summary || !Array.isArray(hypothesisData.combination) || hypothesisData.combination.length === 0) {
+        throw new Error("Generated hypothesis is missing required 'combination' or 'summary' fields.");
     }
-    
+
     // The RecordSynergy tool will log the data. We return its result.
-    const result = await runtime.tools.run('RecordSynergy', toolCall.arguments);
+    const result = await runtime.tools.run('RecordSynergy', {
+        ...hypothesisData,
+        status: "Hypothesized (De Novo)",
+        synergyType: "Synergistic",
+    });
+    
     runtime.logEvent(\`[Hypothesizer] ✅ Successfully generated and recorded new de novo hypothesis.\`);
     return result;
     `
@@ -661,10 +724,10 @@ Do not add any other text or markdown.\`;
     },
     {
         name: 'Analyze Single Source for Synergies',
-        description: 'Analyzes a single validated scientific source to identify potential synergistic combinations. It then performs a multi-layered scoring analysis, including Mechanism of Action (MoA) complementarity and alignment with biological aging theories, to calculate a final "Trial Priority Score".',
+        description: 'Acts as a workflow to fully analyze a single scientific source. It first extracts all known and hypothetical synergies, then iterates through each one to score it, estimate its cost, and record the final, enriched result.',
         category: 'Functional',
         executionEnvironment: 'Client',
-        purpose: 'To perform focused, granular scientific analysis on one source at a time, including multi-faceted scoring, enabling a streaming research workflow that prioritizes the most promising interventions.',
+        purpose: 'To perform focused, granular scientific analysis on one source at a time by orchestrating a sequence of specialized tools, enabling a streaming research workflow.',
         parameters: [
             { name: 'sourceToAnalyze', type: 'object', description: 'The single validated source object to be analyzed.', required: true },
             { name: 'researchObjective', type: 'string', description: 'The original research objective to focus the analysis.', required: true },
@@ -672,105 +735,75 @@ Do not add any other text or markdown.\`;
         ],
         implementationCode: `
         const { sourceToAnalyze: source, researchObjective, metaAnalyses = [] } = args;
-        if (!source || !source.title) {
-            return { success: true, synergies: [] };
-        }
-        
         const foundSynergies = [];
+        runtime.logEvent(\`[Synergy Workflow] Starting analysis for: \${source.title.substring(0,50)}...\`);
 
         try {
-            const sourceContext = \`<SOURCE>\\n<TITLE>\${source.title}</TITLE>\\n<RELIABILITY>\${source.reliabilityScore}</RELIABILITY>\\n<SUMMARY>\${source.summary}</SUMMARY>\\n</SOURCE>\`;
+            // Step 1: Extract all potential synergies using the dedicated tool.
+            const extractionResult = await runtime.tools.run('ExtractKnownAndHypotheticalSynergies', {
+                sourceToAnalyze: source,
+                researchObjective,
+            });
 
-            let systemInstruction = \`You are an expert bioinformatics researcher tasked with **extracting any and all potential combinations of interventions** from a scientific article. Your goal is to maximize recall; subsequent steps will filter for quality.
+            const potentialSynergies = extractionResult.synergies || [];
 
-**Intervention Categories:**
-- **Drug**: Molecules, supplements, organic compounds.
-- **Device**: Hardware, inorganic tools, mechanical/electronic devices.
-- **Behavior**: Lifestyle changes, habits, diets, exercise.
-
-**Your Task:**
-Read the provided source and identify **every mention** of two or more interventions being used together, discussed in combination, or proposed as a combined therapy. Look for keywords like "combination", "co-administration", "adjunctive", "and", "with", "plus".
-
-For **each distinct combination** you find, you MUST call the 'RecordSynergy' tool. You are expected to call this tool multiple times if multiple combinations are found. This is a core requirement.
-
-**For each \\\`RecordSynergy\\\` tool call:**
-1.  **Combination**: Identify the interventions by name AND type. This MUST be an array of objects. Example: \\\`[{"name": "Metformin", "type": "drug"}, {"name": "Exercise", "type": "behavior"}]\\\`.
-2.  **Interaction Type**: Determine if the source describes the interaction as 'Synergistic' (effect is greater than sum of parts), 'Additive' (effects sum up), or 'Antagonistic' (effects cancel out). If the nature isn't specified, default to 'Additive'.
-3.  **Status**: Determine if the source presents this as a 'Known' combination (already studied) or a 'Hypothesized' one (a proposal for future study). If unsure, default to 'Hypothesized'.
-4.  **Rationale**: Provide a scientific rationale based *directly* on the text in the source.
-5.  **Risks**: CRITICALLY ASSESS and clearly state any potential risks or contraindications mentioned in the source. If none are mentioned, state "None mentioned in source".
-
-**CRITICAL RULES:**
-1. If you find no combinations, do not call any tools and respond with an empty text message.
-2. If you find one or more combinations, your entire response MUST consist of only tool calls. Do not add any text before, between, or after the tool calls. For example, if you find three combinations, your response must be three separate calls to the 'RecordSynergy' tool.\`;
-
-            let analysisPrompt = 'Based on the research objective "' + researchObjective + '" and the following source, identify all potential synergies and call the \\'RecordSynergy\\' tool for each one.\\n\\n';
-            if (metaAnalyses.length > 0) {
-                analysisPrompt += 'FOUNDATIONAL META-ANALYSES (for context only):\\n' + JSON.stringify(metaAnalyses.map(s => s.summary)) + '\\n\\n';
+            if (potentialSynergies.length === 0) {
+                runtime.logEvent(\`[Synergy Workflow] ⚪️ No synergies found in source: \${source.title.substring(0,50)}...\`);
+                return { success: true, synergies: [] };
             }
-            analysisPrompt += 'SOURCE TO ANALYZE:\\n' + sourceContext;
 
-            const recordSynergyTool = runtime.tools.list().find(t => t.name === 'RecordSynergy');
-            if (!recordSynergyTool) throw new Error("Core tool 'RecordSynergy' not found.");
+            runtime.logEvent(\`[Synergy Workflow] Extracted \${potentialSynergies.length} synergies. Now scoring and recording each one...\`);
+            const allSourcesForContext = [...metaAnalyses, source];
 
-            const aiResponse = await runtime.ai.processRequest(analysisPrompt, systemInstruction, [recordSynergyTool]);
-
-            if (aiResponse && aiResponse.toolCalls) {
-                const allSourcesForContext = [...metaAnalyses, source];
-                for (const toolCall of aiResponse.toolCalls) {
-                    if (toolCall.name === 'RecordSynergy') {
-                        const synergyData = toolCall.arguments;
-
-                        let combination = synergyData.combination;
-                        if (typeof combination === 'string') {
-                            try { combination = JSON.parse(combination); } catch (e) {
-                                runtime.logEvent(\`[Synergy Analysis] ⚠️ WARNING: Could not parse 'combination' string from AI. Skipping.\`);
-                                continue;
-                            }
-                        }
-
-                        if (!Array.isArray(combination) || combination.length === 0 || combination.some(c => typeof c !== 'object' || !c.name || !c.type)) {
-                            runtime.logEvent(\`[Synergy Analysis] ⚠️ WARNING: AI returned a malformed 'combination' structure. Skipping.\`);
-                            continue;
-                        }
-                        
-                        const synergyToScore = { ...synergyData, combination };
-
-                        // --- NEW: INSTANT COST ESTIMATION ---
-                        const costResult = await runtime.tools.run('Estimate Synergy Validation Cost', { combination });
-                        
-                        const scoringResult = await runtime.tools.run('Score Single Synergy', {
-                            synergyToScore: synergyToScore,
-                            backgroundSources: allSourcesForContext
-                        });
-
-                        const organImpactResult = await runtime.tools.run('Assess Organ-Specific Aging Impact', { synergySummary: scoringResult.updatedSynergy.summary });
-                        
-                        if (scoringResult.updatedSynergy) {
-                             const finalSynergyData = { 
-                                ...scoringResult.updatedSynergy, 
-                                organImpacts: organImpactResult.organImpacts,
-                                sourceUri: source.url, 
-                                sourceTitle: source.title,
-                                estimatedCost: costResult.estimatedCost,
-                                costBreakdown: costResult.costBreakdown,
-                            };
-                            const executionResult = await runtime.tools.run('RecordSynergy', finalSynergyData);
-                            if (executionResult.synergy) {
-                                foundSynergies.push(executionResult.synergy);
-                            }
+            // Step 2: Loop through each extracted synergy and enrich it with scores and costs.
+            for (const synergyToScore of potentialSynergies) {
+                try {
+                    // Defensively check the combination structure
+                    if (!Array.isArray(synergyToScore.combination) || synergyToScore.combination.length < 2 || synergyToScore.combination.some(c => !c.name || !c.type)) {
+                        runtime.logEvent(\`[Synergy Workflow] ⚠️ Skipping malformed synergy from extractor: \${JSON.stringify(synergyToScore.combination)}\`);
+                        continue;
+                    }
+                
+                    // Step 2a: Get cost
+                    const costResult = await runtime.tools.run('Estimate Synergy Validation Cost', { combination: synergyToScore.combination });
+                    
+                    // Step 2b: Get scientific scores
+                    const scoringResult = await runtime.tools.run('Score Single Synergy', {
+                        synergyToScore: synergyToScore,
+                        backgroundSources: allSourcesForContext
+                    });
+                    
+                    // Step 2c: Get organ impact
+                    const organImpactResult = await runtime.tools.run('Assess Organ-Specific Aging Impact', { synergySummary: scoringResult.updatedSynergy.summary });
+                    
+                    // Step 2d: Assemble and record the final, enriched synergy object
+                    if (scoringResult.updatedSynergy) {
+                         const finalSynergyData = { 
+                            ...scoringResult.updatedSynergy, 
+                            organImpacts: organImpactResult.organImpacts,
+                            sourceUri: source.url || source.uri, 
+                            sourceTitle: source.title,
+                            estimatedCost: costResult.estimatedCost,
+                            costBreakdown: costResult.costBreakdown,
+                        };
+                        const executionResult = await runtime.tools.run('RecordSynergy', finalSynergyData);
+                        if (executionResult.synergy) {
+                            foundSynergies.push(executionResult.synergy);
                         }
                     }
+                } catch (innerError) {
+                    runtime.logEvent(\`[Synergy Workflow] ❌ Error processing a single synergy: \${innerError.message}\`);
+                    // Continue to the next synergy
                 }
-                 runtime.logEvent(\`[Synergy Analysis] ✅ Processed source: \${source.title.substring(0,50)}... Found \${(aiResponse.toolCalls || []).length} synergies.\`);
-            } else {
-                 runtime.logEvent(\`[Synergy Analysis] ⚪️ No synergies found in source: \${source.title.substring(0,50)}...\`);
             }
+
         } catch (e) {
-             runtime.logEvent(\`[Synergy Analysis] ❌ ERROR processing source \${source.title.substring(0,50)}...: \${e.message}\`);
-             return { success: false, error: e.message, synergies: [] };
+             runtime.logEvent(\`[Synergy Workflow] ❌ CRITICAL ERROR during synergy analysis for \${source.title.substring(0,50)}...: \${e.message}\`);
+             // Re-throwing so the main workflow can catch it.
+             throw e;
         }
         
+        runtime.logEvent(\`[Synergy Workflow] ✅ Finished analysis for source. Recorded \${foundSynergies.length} synergies.\`);
         return {
             success: true,
             synergies: foundSynergies,
@@ -876,11 +909,137 @@ For **each distinct combination** you find, you MUST call the 'RecordSynergy' to
         `
     },
     {
-        name: 'Generate Proposal for Single Synergy',
-        description: 'Generates a full, investment-ready trial dossier and a critical review for a single promising synergistic combination.',
+        name: 'GenerateDossierNarrative',
+        description: 'Generates the core narrative sections (Executive Summary, Scientific Rationale) for an investment dossier based on a synergy and background literature.',
         category: 'Functional',
         executionEnvironment: 'Client',
-        purpose: 'To encapsulate the complex, multi-step process of proposal generation and critique into a single, callable tool for a streaming workflow.',
+        purpose: 'To break down dossier creation into a manageable, text-focused generation task for the AI, improving reliability.',
+        parameters: [
+            { name: 'synergy', type: 'object', description: 'The synergy object to generate a proposal for.', required: true },
+            { name: 'backgroundSources', type: 'array', description: 'The full list of validated scientific sources to use as background context.', required: true },
+        ],
+        implementationCode: `
+            const { synergy, backgroundSources } = args;
+            const systemInstruction = \`You are a senior biotech investment analyst. Create the core narrative for an investment dossier.
+You MUST respond with ONLY a single, valid JSON object in the following format:
+{
+  "executiveSummary": "A high-level summary for investors.",
+  "scientificRationale": "A detailed explanation of the biological mechanism and synergy, grounded in the provided literature."
+}\`;
+            const prompt = \`SYNERGY TO PROPOSE: \${JSON.stringify(synergy)}\\n\\nBACKGROUND LITERATURE: \${JSON.stringify(backgroundSources.map(s => s.summary))}\\n\\nGenerate the narrative sections.\`;
+
+            const aiResponseText = await runtime.ai.generateText(prompt, systemInstruction);
+            try {
+                const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
+                if (!jsonMatch) throw new Error("Narrative generation AI did not return valid JSON.");
+                return JSON.parse(jsonMatch[0]);
+            } catch (e) {
+                throw new Error(\`Failed to parse narrative sections: \${e.message}\`);
+            }
+        `
+    },
+    {
+        name: 'AnalyzeDossierRisks',
+        description: 'Performs a structured risk analysis for a scientific proposal, generating scores and summaries for scientific, commercial, and safety risks.',
+        category: 'Functional',
+        executionEnvironment: 'Client',
+        purpose: 'To isolate the complex task of risk assessment into a single, focused AI call, improving reliability.',
+        parameters: [
+            { name: 'synergy', type: 'object', description: 'The synergy object being analyzed.', required: true },
+            { name: 'scientificRationale', type: 'string', description: 'The generated scientific rationale for context.', required: true },
+            { name: 'backgroundSources', type: 'array', description: 'The full list of validated scientific sources to use as background context.', required: true },
+        ],
+        implementationCode: `
+            const { synergy, scientificRationale, backgroundSources } = args;
+            const systemInstruction = \`You are a skeptical biotech risk analyst. Your task is to perform a structured risk analysis.
+You MUST respond with ONLY a single, valid JSON object in the following format:
+{
+  "riskAnalysis": {
+    "scientificRisk": 30,
+    "commercialRisk": 50,
+    "safetyRisk": 60,
+    "overallRiskScore": 45,
+    "riskSummary": "Primary risk is potential for off-target effects of Compound A..."
+  }
+}\`;
+            const prompt = \`PROPOSAL RATIONALE: \${scientificRationale}\\n\\nSYNERGY: \${JSON.stringify(synergy)}\\n\\nBACKGROUND: \${JSON.stringify(backgroundSources.map(s => s.summary))}\\n\\nGenerate the structured risk analysis.\`;
+
+            const aiResponseText = await runtime.ai.generateText(prompt, systemInstruction);
+            try {
+                const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
+                if (!jsonMatch) throw new Error("Risk analysis AI did not return valid JSON.");
+                return JSON.parse(jsonMatch[0]);
+            } catch (e) {
+                throw new Error(\`Failed to parse risk analysis: \${e.message}\`);
+            }
+        `
+    },
+    {
+        name: 'CreateMitigationPlanAndRoadmap',
+        description: 'Generates a concrete mitigation plan, a cost estimate for that plan, and a high-level development roadmap based on identified risks and a scientific proposal.',
+        category: 'Functional',
+        executionEnvironment: 'Client',
+        purpose: 'To separate the "planning" and "costing" phase of dossier creation into a dedicated AI task.',
+        parameters: [
+            { name: 'riskSummary', type: 'string', description: 'The summary of the key risks to address.', required: true },
+            { name: 'synergy', type: 'object', description: 'The synergy object being analyzed.', required: true },
+        ],
+        implementationCode: `
+            const { riskSummary, synergy } = args;
+            const systemInstruction = \`You are a biotech project manager. Based on the key risks, create a de-risking plan and roadmap.
+You MUST respond with ONLY a single, valid JSON object in the following format:
+{
+  "mitigationPlan": "Conduct 12-month mouse longevity study and advanced toxicology screens.",
+  "estimatedCostUSD": 150000,
+  "roadmap": "Phase 1: Preclinical toxicology (6 months). Phase 2: Mouse efficacy studies (12 months)."
+}\`;
+            const prompt = \`SYNERGY: \${JSON.stringify(synergy)}\\n\\nKEY RISKS: "\${riskSummary}"\\n\\nGenerate the mitigation plan, cost, and roadmap.\`;
+
+            const aiResponseText = await runtime.ai.generateText(prompt, systemInstruction);
+            try {
+                const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
+                if (!jsonMatch) throw new Error("Mitigation plan AI did not return valid JSON.");
+                return JSON.parse(jsonMatch[0]);
+            } catch (e) {
+                throw new Error(\`Failed to parse mitigation plan: \${e.message}\`);
+            }
+        `
+    },
+    {
+        name: 'GenerateMarketAnalysis',
+        description: 'Generates an analysis of the market opportunity and potential intellectual property (IP) for a given synergistic intervention.',
+        category: 'Functional',
+        executionEnvironment: 'Client',
+        purpose: 'To handle the business and commercial analysis portion of the dossier in a separate, focused AI call.',
+        parameters: [
+            { name: 'synergy', type: 'object', description: 'The synergy object being analyzed.', required: true },
+            { name: 'researchObjective', type: 'string', description: 'The overall research objective for market context.', required: true },
+        ],
+        implementationCode: `
+            const { synergy, researchObjective } = args;
+            const systemInstruction = \`You are a biotech market analyst. Analyze the market and IP landscape.
+You MUST respond with ONLY a single, valid JSON object in the following format:
+{
+  "marketAndIP": "The market for [\${researchObjective}] is estimated at $XB. While Compound A is off-patent, the combination therapy could be patentable via a new use-case or formulation patent..."
+}\`;
+            const prompt = \`RESEARCH OBJECTIVE: \${researchObjective}\\n\\nSYNERGY: \${JSON.stringify(synergy)}\\n\\nGenerate the Market & IP analysis.\`;
+
+            const aiResponseText = await runtime.ai.generateText(prompt, systemInstruction);
+            try {
+                const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
+                if (!jsonMatch) throw new Error("Market analysis AI did not return valid JSON.");
+                return JSON.parse(jsonMatch[0]);
+            } catch (e) {
+                throw new Error(\`Failed to parse market analysis: \${e.message}\`);
+            }
+        `
+    },
+    {
+        name: 'Generate Proposal for Single Synergy',
+        description: 'Acts as a workflow orchestrator to generate a full, investment-ready trial dossier and a critical review by calling a sequence of specialized, granular tools.',
+        category: 'Functional',
+        executionEnvironment: 'Client',
+        purpose: 'To reliably encapsulate the complex, multi-step process of proposal generation and critique into a single, callable tool.',
         parameters: [
             { name: 'synergy', type: 'object', description: 'The synergy object to generate a proposal for. Must include combination, summary, etc.', required: true },
             { name: 'backgroundSources', type: 'array', description: 'The full list of validated scientific sources to use as background context for the proposal.', required: true },
@@ -888,83 +1047,79 @@ For **each distinct combination** you find, you MUST call the 'RecordSynergy' to
         implementationCode: `
         const { synergy, backgroundSources } = args;
         const comboString = synergy.combination.map(c => c.name).join(' + ');
-        runtime.logEvent(\`[Proposal] Generating dossier for: \${comboString}\`);
+        runtime.logEvent(\`[Dossier Workflow] Starting dossier assembly for: \${comboString}\`);
 
-        const dossierTool = runtime.tools.list().find(t => t.name === 'RecordTrialDossier');
-        if (!dossierTool) throw new Error("Core tool 'RecordTrialDossier' not found.");
-
-        const dossierGenPrompt = \`You are a senior biotech investment analyst. Create a comprehensive investment dossier for the synergistic combination provided.
-Your analysis MUST be grounded in the BACKGROUND LITERATURE.
-You MUST call the 'RecordTrialDossier' tool with all the required information.
-
-**CRITICAL INSTRUCTIONS for Risk & Mitigation Section:**
-1.  **Risk Analysis:** You must provide a structured 'riskAnalysis' object.
-    -   **scientificRisk (0-100):** How likely is the core scientific hypothesis to be wrong?
-    -   **commercialRisk (0-100):** How significant are market, IP, or competitive risks?
-    -   **safetyRisk (0-100):** What is the risk of unforeseen toxicity or adverse effects?
-    -   **overallRiskScore (0-100):** Your blended assessment of all risks.
-    -   **riskSummary (string):** A brief text summary of the primary risks.
-2.  **Mitigation (Risk Insurance):** You must define a clear 'mitigationPlan' and 'estimatedCostUSD'.
-    -   **mitigationPlan:** Propose concrete next steps to de-risk the project (e.g., "Conduct 12-month mouse longevity study and advanced toxicology screens."). This is the "insurance policy".
-    -   **estimatedCostUSD:** Estimate the cost of this plan in USD. This is the "insurance premium".
-
-SYNERGY TO PROPOSE: \${JSON.stringify(synergy)}
-BACKGROUND LITERATURE: \${JSON.stringify(backgroundSources.map(s => s.summary))}\`;
-        
-        const dossierSystemInstruction = "You are an expert system that generates a detailed investment dossier, including a structured risk analysis and mitigation plan, then calls the 'RecordTrialDossier' tool with the results.";
-        
-        let generatedDossier = null;
         try {
-            const dossierAiResponse = await runtime.ai.processRequest(dossierGenPrompt, dossierSystemInstruction, [dossierTool]);
-            if (dossierAiResponse && dossierAiResponse.toolCalls && dossierAiResponse.toolCalls.length > 0) {
-                const toolCall = dossierAiResponse.toolCalls[0];
-                if (toolCall.name === 'RecordTrialDossier') {
-                    // --- VIRTUAL CELL VALIDATION STEP ---
-                    runtime.logEvent(\`[Proposal] ...generating molecular mechanism validation for \${comboString}.\`);
-                    let molecularMechanism = 'Analysis could not be performed.';
-                    try {
-                        const validationResult = await runtime.tools.run('Virtual Cell Validator', {
-                            synergyCombination: synergy.combination.map(c => c.name),
-                            observedEffect: synergy.summary
-                        });
-                        if (validationResult.explanation) {
-                            molecularMechanism = validationResult.explanation;
-                        }
-                    } catch (e) {
-                         runtime.logEvent(\`[Proposal] ⚠️ Virtual Cell Validator failed: \${e.message}\`);
-                    }
-                    
-                    // Add the mechanism to the dossier arguments before recording
-                    const finalDossierArgs = { ...toolCall.arguments, molecularMechanism };
+            // Step 1: Generate core narrative
+            runtime.logEvent(\`[Dossier Workflow] ...step 1: generating narrative.\`);
+            const narrativeResult = await runtime.tools.run('GenerateDossierNarrative', { synergy, backgroundSources });
 
-                    const dossierResult = await runtime.tools.run(toolCall.name, finalDossierArgs);
-                    if (dossierResult.dossier) {
-                        generatedDossier = dossierResult.dossier;
-                        runtime.logEvent(\`[Proposal] ...successfully wrote dossier for \${comboString}.\`);
-                    }
-                }
-            } else {
-                 throw new Error("AI did not generate a dossier tool call.");
+            // Step 2: Generate risk analysis
+            runtime.logEvent(\`[Dossier Workflow] ...step 2: analyzing risks.\`);
+            const riskResult = await runtime.tools.run('AnalyzeDossierRisks', {
+                synergy,
+                scientificRationale: narrativeResult.scientificRationale,
+                backgroundSources,
+            });
+
+            // Step 3: Generate mitigation plan & roadmap
+            runtime.logEvent(\`[Dossier Workflow] ...step 3: creating mitigation plan.\`);
+            const mitigationResult = await runtime.tools.run('CreateMitigationPlanAndRoadmap', {
+                riskSummary: riskResult.riskAnalysis.riskSummary,
+                synergy,
+            });
+
+            // Step 4: Generate market analysis
+            runtime.logEvent(\`[Dossier Workflow] ...step 4: generating market analysis.\`);
+            const { taskPrompt } = runtime.getState(); // Get current research objective from state
+            const marketResult = await runtime.tools.run('GenerateMarketAnalysis', {
+                synergy,
+                researchObjective: taskPrompt,
+            });
+
+            // Step 5: Validate molecular mechanism
+            runtime.logEvent(\`[Dossier Workflow] ...step 5: validating molecular mechanism.\`);
+            const validationResult = await runtime.tools.run('Virtual Cell Validator', {
+                synergyCombination: synergy.combination.map(c => c.name),
+                observedEffect: synergy.summary,
+            });
+
+            // Final Step: Assemble and record the dossier
+            runtime.logEvent(\`[Dossier Workflow] ...final step: assembling and recording dossier.\`);
+            const finalDossierData = {
+                combination: synergy.combination,
+                executiveSummary: narrativeResult.executiveSummary,
+                scientificRationale: narrativeResult.scientificRationale,
+                inSilicoValidation: "Predicted via Organoid Odyssey simulation. Further in vitro validation required.", // This can be a standard string
+                marketAndIP: marketResult.marketAndIP,
+                roadmap: mitigationResult.roadmap,
+                riskAnalysis: riskResult.riskAnalysis,
+                mitigationPlan: mitigationResult.mitigationPlan,
+                estimatedCostUSD: mitigationResult.estimatedCostUSD,
+                molecularMechanism: validationResult.explanation,
+            };
+
+            const recordResult = await runtime.tools.run('RecordTrialDossier', finalDossierData);
+            const generatedDossier = recordResult.dossier;
+
+            runtime.logEvent(\`[Dossier Workflow] ✅ Dossier for \${comboString} assembled and recorded.\`);
+            
+            // Post-generation critique
+            runtime.logEvent(\`[Dossier Workflow] ...subjecting dossier to critical review.\`);
+            const critiqueResult = await runtime.tools.run('Critique Investment Proposal', { dossier: generatedDossier });
+
+            // The RecordTrialDossier tool will have already added the dossier to the feed.
+            // We can optionally add the critique to the generated dossier object.
+             if (generatedDossier && critiqueResult.critique) {
+                generatedDossier.critique = critiqueResult.critique;
             }
-        } catch(e) {
-             runtime.logEvent(\`[Proposal] ❌ Dossier generation failed for \${comboString}. Error: \${e.message}\`);
-             return { success: false, error: 'Dossier generation failed.' };
-        }
 
-        if (!generatedDossier) {
-            return { success: true, message: 'Dossier was not generated by the AI.' };
-        }
-        
-        // Step 2: Critique Generated Dossier
-        runtime.logEvent(\`[Proposal] Subjecting \${comboString} proposal to critical review...\`);
-        let critiqueResult = null;
-        try {
-            critiqueResult = await runtime.tools.run('Critique Investment Proposal', { dossier: generatedDossier });
-        } catch (e) { 
-            runtime.logEvent(\`[Proposal] ⚠️ Critique failed for \${comboString}. Error: \${e.message}\`); 
-        }
+            return { success: true, dossier: generatedDossier, critique: critiqueResult.critique };
 
-        return { success: true, message: 'Proposal generation and critique complete.', dossier: generatedDossier, critique: critiqueResult?.critique };
+        } catch (e) {
+            runtime.logEvent(\`[Dossier Workflow] ❌ FAILED to assemble dossier for \${comboString}. Error: \${e.message}\`);
+            throw new Error(\`Dossier assembly workflow failed: \${e.message}\`);
+        }
     `
     },
     {
@@ -1007,26 +1162,30 @@ BACKGROUND LITERATURE: \${JSON.stringify(backgroundSources.map(s => s.summary))}
 -   Analyze the provided dossier and any search evidence.
 -   Your tone should be critical, professional, and evidence-based.
 -   Focus on: 1) Understated risks. 2) Weaknesses in the scientific rationale. 3) Contradictory evidence. 4) Feasibility.
--   You MUST respond by calling the 'RecordCritique' tool with your complete analysis.\`;
-
-        const recordCritiqueTool = runtime.tools.list().find(t => t.name === 'RecordCritique');
-        if (!recordCritiqueTool) throw new Error("Core tool 'RecordCritique' not found.");
-        
-        // Add the combination to the arguments the AI needs to pass to the tool
-        recordCritiqueTool.parameters.find(p => p.name === 'combination').description = 'The combination being critiqued. You MUST pass the original combination: ' + JSON.stringify(dossier.combination);
+-   You MUST respond with ONLY a single, valid JSON object with the following keys: "strengths", "weaknesses", "contradictoryEvidence" (an array of strings), and "overallVerdict" (one of "Sound", "Needs Revision", or "High Risk").\`;
 
         runtime.logEvent('[Critique] Generating critique for ' + comboString + '...');
-        const aiResponse = await runtime.ai.processRequest(context, systemInstruction, [recordCritiqueTool]);
-        
-        const critiqueCall = aiResponse?.toolCalls?.[0];
-        if (!critiqueCall || critiqueCall.name !== 'RecordCritique') {
-            runtime.logEvent('[Critique] ❌ AI did not call the RecordCritique tool as instructed. Response: ' + JSON.stringify(aiResponse));
-            throw new Error("AI did not generate the expected critique tool call.");
+        const aiResponseText = await runtime.ai.generateText(context, systemInstruction);
+
+        let critiqueData;
+        try {
+            const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
+            if (!jsonMatch) throw new Error("AI did not return a valid JSON object for the critique.");
+            critiqueData = JSON.parse(jsonMatch[0]);
+        } catch (e) {
+            runtime.logEvent('[Critique] ❌ Error parsing JSON from critique AI. Response: ' + aiResponseText);
+            throw new Error("Failed to parse critique from AI: " + e.message);
         }
-        
-        // The critique tool will log the data. We just need to return its structured result.
-        const critiqueResult = await runtime.tools.run(critiqueCall.name, critiqueCall.arguments);
-        
+
+        // Manually add the combination to the data, as the AI no longer needs to.
+        const fullCritiqueArgs = {
+            ...critiqueData,
+            combination: dossier.combination,
+        };
+
+        // Now, manually call the 'RecordCritique' tool.
+        const critiqueResult = await runtime.tools.run('RecordCritique', fullCritiqueArgs);
+
         return { success: true, message: 'Critique generated for ' + comboString, critique: critiqueResult.critique };
     `
     },

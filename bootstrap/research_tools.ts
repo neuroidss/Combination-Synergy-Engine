@@ -1,6 +1,66 @@
+
 import type { ToolCreatorPayload } from '../types';
 
 export const RESEARCH_TOOLS: ToolCreatorPayload[] = [
+    {
+        name: 'Rank Search Results',
+        description: 'Ranks a list of scientific search results based on their relevance to a research objective, prioritizing meta-analyses and systematic reviews.',
+        category: 'Functional',
+        executionEnvironment: 'Client',
+        purpose: 'To prioritize the most promising scientific articles first, ensuring that the most valuable information is processed at the beginning of the workflow.',
+        parameters: [
+            { name: 'searchResults', type: 'array', description: 'An array of search result objects, each with a "title" and "snippet".', required: true },
+            { name: 'researchObjective', type: 'string', description: 'The overall research objective to guide the ranking.', required: true },
+        ],
+        implementationCode: `
+            const { searchResults, researchObjective } = args;
+            if (!searchResults || searchResults.length === 0) {
+                return { success: true, rankedResults: [] };
+            }
+
+            const systemInstruction = \`You are a research prioritization expert. Your task is to rank a list of scientific articles based on their relevance to a research objective.
+- Give the HIGHEST priority to titles containing "meta-analysis", "systematic review", or "review".
+- Give HIGH priority to articles that seem to directly address the core of the research objective.
+- Give LOWER priority to patents or highly specific, narrow studies unless they are exceptionally relevant.
+- You MUST respond with ONLY a single, valid JSON object containing a single key "ranked_titles", which is an array of the exact titles of the articles in their new, ranked order.
+- The returned list MUST contain all of the original titles, just reordered.\`;
+
+            const context = searchResults.map(r => \`Title: \${r.title}\\nSnippet: \${r.snippet}\`).join('\\n---\\n');
+            const prompt = \`Research Objective: "\${researchObjective}"\\n\\nRank the following articles based on the objective. Return a JSON object with the "ranked_titles" array.\\n\\nARTICLES:\\n\${context}\`;
+
+            const aiResponseText = await runtime.ai.generateText(prompt, systemInstruction);
+
+            try {
+                const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
+                if (!jsonMatch) throw new Error("AI did not return a valid JSON object for ranking.");
+                const parsed = JSON.parse(jsonMatch[0]);
+                const rankedTitles = parsed.ranked_titles;
+
+                if (!Array.isArray(rankedTitles)) {
+                    throw new Error("AI response did not contain a 'ranked_titles' array.");
+                }
+
+                const titleToResultMap = new Map(searchResults.map(r => [r.title, r]));
+                const rankedResults = rankedTitles.map(title => titleToResultMap.get(title)).filter(Boolean);
+                
+                // Add any missing results to the end to ensure nothing is lost
+                const rankedUrls = new Set(rankedResults.map(r => r.link));
+                for (const result of searchResults) {
+                    if (!rankedUrls.has(result.link)) {
+                        rankedResults.push(result);
+                    }
+                }
+
+                runtime.logEvent(\`[Ranker] ✅ Successfully ranked \${searchResults.length} articles.\`);
+                return { success: true, rankedResults };
+
+            } catch (e) {
+                runtime.logEvent(\`[Ranker] ⚠️ WARN: Failed to rank search results with AI: \${e.message}. Proceeding with original order.\`);
+                // Fallback: return the original order if AI fails
+                return { success: true, rankedResults: searchResults };
+            }
+        `
+    },
     {
         name: 'DiscoverProxyBuilders',
         description: 'Uses an AI model to discover and generate code for new public CORS proxy services. This is a powerful adaptation mechanism to bypass content blockades when existing proxies fail.',
@@ -65,7 +125,8 @@ Find 2-3 MORE different, currently active public CORS proxies and provide their 
                 "RecordPrimaryStudy", "RecordSynergy", "RecordSynergyGameParameters", "RecordTrialDossier",
                 "RecordCritique", "RecordErrorAnalysis", "Diagnose Tool Execution Error", "InterpretVacancy",
                 "FindPersonalizedVacancies", "CreateUserAgingVector", "ProjectUserOntoMap", "Synergy Forge Main UI",
-                "AdaptFetchStrategy", "DiscoverProxyBuilders", "Find and Validate Single Source", "Export Learned Skills"
+                "AdaptFetchStrategy", "DiscoverProxyBuilders", "Find and Validate Single Source", "Export Learned Skills",
+                "Rank Search Results"
             ]);
 
             const learnedTools = allTools.filter(tool => !bootstrapToolNames.has(tool.name));
@@ -296,7 +357,15 @@ You MUST respond with ONLY a single, valid JSON object in the following format:
                 }
             }
 
-            const uniqueResults = Array.from(new Map(allResults.map(item => [item.link, item])).values());
+            const uniqueResultsMap = new Map();
+            for (const item of allResults) {
+                const canonicalUrl = runtime.search.buildCanonicalUrl(item.link);
+                if (canonicalUrl && !uniqueResultsMap.has(canonicalUrl)) {
+                    // Update the item's link to the canonical one before storing
+                    uniqueResultsMap.set(canonicalUrl, { ...item, link: canonicalUrl });
+                }
+            }
+            const uniqueResults = Array.from(uniqueResultsMap.values());
             
             runtime.logEvent('[Search] Federated search complete. Found ' + uniqueResults.length + ' unique potential sources.');
 

@@ -57,22 +57,31 @@ export const DISCOVERY_TOOLS: ToolCreatorPayload[] = [
 Your task is to invent a novel, groundbreaking hypothesis that connects these disparate fields and fills this gap.
 - Analyze the provided research summaries.
 - Synthesize a new idea that logically bridges the concepts.
-- Write a compelling, futuristic abstract for a hypothetical scientific paper that would fill this gap.
-- The abstract should propose a novel mechanism, a new therapeutic combination, or an undiscovered link.
 - Your tone should be confident and pioneering.
-- Respond with ONLY the text of the abstract. Do not add any introductory phrases like "Here is the abstract:".\`;
+- You MUST respond with ONLY a single, valid JSON object with the following structure:
+{
+  "hypotheticalAbstract": "A compelling, futuristic abstract for a hypothetical scientific paper that would fill this gap.",
+  "proposedCombination": [{"name": "Compound A", "type": "drug"}, {"name": "Device B", "type": "device"}],
+  "coreMechanism": "A brief explanation of the core scientific mechanism you are proposing."
+}
+\`;
 
-            const prompt = \`I have found a gap in scientific knowledge. This gap is semantically located between the following concepts, which are represented by their research paper abstracts. Generate a hypothetical abstract for the paper that would perfectly fill this void.\\n\\n\${context}\`;
+            const prompt = \`I have found a gap in scientific knowledge. This gap is semantically located between the following concepts, which are represented by their research paper abstracts. Generate a structured hypothesis that would perfectly fill this void.\\n\\n\${context}\`;
 
-            const hypotheticalAbstract = await runtime.ai.generateText(prompt, systemInstruction);
+            const aiResponseText = await runtime.ai.generateText(prompt, systemInstruction);
+            const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
+            if (!jsonMatch) {
+                throw new Error("The AI failed to generate a structured hypothesis from the vacancy. Raw response: " + aiResponseText);
+            }
+            const hypothesisData = JSON.parse(jsonMatch[0]);
 
-            if (!hypotheticalAbstract) {
-                throw new Error("The AI failed to generate a hypothetical abstract.");
+            if (!hypothesisData.hypotheticalAbstract || !hypothesisData.proposedCombination) {
+                 throw new Error("The AI failed to generate a valid structured hypothesis. Missing required fields.");
             }
             
-            runtime.logEvent("[Vacancy Interpreter] ✅ Generated hypothetical abstract for research vacancy.");
+            runtime.logEvent("[Vacancy Interpreter] ✅ Generated structured hypothesis for research vacancy.");
 
-            return { hypotheticalAbstract, neighbors: nearestNeighbors.map(n => n.source) };
+            return { ...hypothesisData, neighbors: nearestNeighbors.map(n => n.source) };
         `
     },
     {

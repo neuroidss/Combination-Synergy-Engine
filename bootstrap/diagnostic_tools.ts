@@ -1,3 +1,4 @@
+
 import type { ToolCreatorPayload } from '../types';
 
 export const DIAGNOSTIC_TOOLS: ToolCreatorPayload[] = [
@@ -60,13 +61,10 @@ export const DIAGNOSTIC_TOOLS: ToolCreatorPayload[] = [
             if (!recordTool) {
                 throw new Error("Diagnostic process failed: The 'RecordErrorAnalysis' tool is missing.");
             }
-
-            // Use a powerful model for this complex reasoning task, overriding the user's selection.
-            const diagnosticModel = { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'GoogleAI' };
             
             try {
-                // The runtime's processRequest is enhanced to accept a model override.
-                const aiResponse = await runtime.ai.processRequest(prompt, systemInstruction, [recordTool], [], diagnosticModel);
+                // The model override has been removed. The tool will now use the currently selected model.
+                const aiResponse = await runtime.ai.processRequest(prompt, systemInstruction, [recordTool], []);
                 
                 if (!aiResponse || !aiResponse.toolCalls || !aiResponse.toolCalls.length === 0) {
                     throw new Error("The diagnostic AI failed to call the 'RecordErrorAnalysis' tool as instructed.");

@@ -1,9 +1,13 @@
+
+
 import { useState, useEffect, useCallback } from 'react';
 import { loadStateFromStorage, saveStateToStorage, saveMapStateToStorage, loadMapStateToStorage } from '../versioning';
 import type { AIModel, APIConfig } from '../types';
 import { AI_MODELS } from '../constants';
 
-export const useAppStateManager = () => {
+// FIX: Changed from const arrow function to a function declaration
+// to potentially resolve type inference issues in consuming hooks.
+export function useAppStateManager() {
     const [eventLog, setEventLog] = useState<string[]>([]);
     const [apiCallCount, setApiCallCount] = useState<Record<string, number>>({});
     const [selectedModel, setSelectedModel] = useState<AIModel>(AI_MODELS[0]);
@@ -11,7 +15,7 @@ export const useAppStateManager = () => {
         googleAIAPIKey: process.env.GEMINI_API_KEY || '',
         openAIAPIKey: '',
         openAIBaseUrl: '',
-        ollamaHost: '',
+        ollamaHost: 'http://localhost:11434',
     });
     // Live feed state
     const [liveFeed, setLiveFeed] = useState<any[]>([]);
@@ -30,9 +34,9 @@ export const useAppStateManager = () => {
             // Merge stored config with env vars, giving env vars precedence.
             setApiConfig(prevConfig => ({
                 ...prevConfig,
-                openAIAPIKey: storedState.apiConfig?.openAIAPIKey || '',
-                openAIBaseUrl: storedState.apiConfig?.openAIBaseUrl || '',
-                ollamaHost: storedState.apiConfig?.ollamaHost || '',
+                openAIAPIKey: storedState.apiConfig?.openAIAPIKey ?? '',
+                openAIBaseUrl: storedState.apiConfig?.openAIBaseUrl ?? '',
+                ollamaHost: storedState.apiConfig?.ollamaHost ?? 'http://localhost:11434',
             }));
             console.log("Loaded non-Google API config from storage.", storedState.apiConfig);
         }
@@ -148,4 +152,4 @@ export const useAppStateManager = () => {
         taskPrompt,
         setTaskPrompt,
     };
-};
+}

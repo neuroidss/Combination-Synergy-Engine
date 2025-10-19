@@ -4,39 +4,38 @@
 
 SynergyForge is a browser-first platform for an **AI agent capable of autonomous bioinformatics research**. It mines thousands of scientific papers to discover novel, synergistic interventions for longevity and powers an educational organoid simulation game to visualize their effects.
 
-The core of the platform is a discovery engine that goes beyond simple search. It maps the entire landscape of scientific knowledge, identifies unexplored gaps between research areas, and generates novel, testable hypotheses to fill them.
+The core of the platform is a discovery engine that goes beyond simple search. It builds a real-time, financially-oriented **Intervention Knowledge Space** to identify unexplored connections between research areas and generate novel, testable, and cost-analyzed investment opportunities.
 
 ![SynergyForge Discovery Map and Hypothesis Generation](https://github.com/neuroidss/Combination-Synergy-Engine/blob/main/Screenshot%20from%202025-10-12%2018-22-52.png?raw=true)
 
 ## The Discovery Engine: Finding What's Next
 
-Inspired by AI techniques used to find "patent vacancies," SynergyForge applies the same principle to the vast world of scientific literature.
+Instead of mapping papers, SynergyForge builds a dynamic knowledge graph where the nodes are interventions (e.g., Metformin, Exercise) and the edges are synergies. This creates a living, financially-oriented model of the scientific landscape that directly answers the question, "Where should we invest next?"
 
-1.  **Live Discovery Map:** The agent ingests thousands of scientific papers and uses text embeddings to generate a 2D "Discovery Map." On this map, the distance between any two points represents their conceptual similarity. This creates a visual representation of the entire research landscape.
+1.  **Real-time Intervention Knowledge Space:** As the agent reads scientific literature, it populates a "knowledge space" in real-time. Each new intervention discovered becomes a node in this space.
 
-2.  **Identifying Semantic Vacancies:** The engine then identifies "vacancies"—unexplored gaps that lie between related but distinct clusters of research. A vacancy represents a profound opportunity: a non-obvious connection that no one has made yet.
+2.  **Instant Costing & Synergy Identification:** For each intervention, the agent immediately estimates its in-vitro validation cost. It then identifies **known synergies** described in the literature, creating connections between intervention nodes. Each connection is immediately scored for scientific promise and its total cost is calculated.
 
-3.  **Hypothesis Generation (`InterpretVacancy`):** When a user clicks a vacancy, the AI analyzes the neighboring research papers and performs "embedding inversion." It generates a detailed, hypothetical abstract for a new scientific paper that would perfectly fill that conceptual gap. This translates an abstract opportunity into a concrete, novel, and often revolutionary research idea.
+3.  **On-the-Fly Hypothesis Generation:** This is the core of the discovery engine. After analyzing an article and identifying the interventions it discusses (e.g., A, B, and C) and the synergies it proves (e.g., A+B), the AI immediately looks for "knowledge gaps." It asks: "What about A+C, or B+C?" It then generates these **hypothetical synergies**, scores them, costs them, and adds them to the knowledge space as new, high-potential investment opportunities.
 
 ### Use Case 1: Discovering Neuronal Anti-aging Therapies
 
 To find new ways to reverse brain aging, the engine is given the objective: *"Discover synergistic interventions to reverse neuronal aging by enhancing mitochondrial function, promoting neurogenesis, and reducing neuroinflammation."*
 
-*   **Result:** The engine builds a map of neurobiology and aging research.
-*   **Hypothesis:** It identifies a vacancy between research on **"mitochondrial dysfunction in Alzheimer's"** and **"autophagy in clearing synaptic proteins."**
-*   **Generated Idea:** The AI proposes a novel combination therapy: a small molecule that enhances **mitophagy** (clearing damaged mitochondria) paired with a peptide that **promotes synaptic protein synthesis**. The synergy lies in simultaneously removing dysfunctional energy sources at the synapse while rebuilding it—a new, trial-ready concept.
+*   **Result:** The engine analyzes a meta-review on neuronal aging, identifying interventions like **"Urolithin A"** (enhances mitophagy), **"Lion's Mane"** (promotes neurogenesis), and **"transcranial magnetic stimulation (TMS)"** (reduces neuroinflammation).
+*   **Known Synergy:** It extracts a known synergy between Urolithin A and Lion's Mane, immediately costing and scoring it.
+*   **Generated Hypothesis:** The AI notes that no combination with TMS is mentioned. It generates a novel, tri-modal hypothesis: combining Urolithin A and Lion's Mane with a targeted TMS protocol to create a powerful, multi-pronged approach to clear damaged components, rebuild neurons, and create a healthier environment for them to thrive in. This new, cost-analyzed proposal appears instantly in the investment opportunities feed.
 
 ### Use Case 2: Engineering "Superneurons"
 
 To explore cognitive enhancement, the objective is set to: *"Identify interventions to enhance cognitive function, memory, and network efficiency beyond the physiological baseline."*
 
-*   **Result:** The engine maps the landscape of nootropics, genetic engineering, and neuro-stimulation.
-*   **Hypothesis:** It finds a vacancy between **"CRISPR-based epigenetic editing for memory"** and **"optogenetics for precise neuronal activation."**
-*   **Generated Idea:** The AI generates an abstract for a groundbreaking technology: an AAV gene therapy delivering a **light-sensitive CRISPR-Cas9 system**. This system could be non-invasively controlled by transcranial light to dynamically rewrite the epigenetic marks on genes related to learning and memory, enabling "programmable plasticity" and an unprecedented rate of learning.
+*   **Result:** The engine processes an article discussing **"ampakines"** (a class of cognitive enhancers) and **"meditation"** (a behavioral intervention).
+*   **Hypothesis Generation:** It immediately generates a hypothetical synergy, proposing that a low dose of an ampakine could amplify the plastic changes in the brain induced by focused-attention meditation, leading to a synergistic improvement in learning rates. This novel "pharma-behavioral" combination is costed, scored, and presented as a new opportunity.
 
 ## Key Features
 
-*   **Live Discovery Map & Hypothesis Generation:** Visualizes the scientific landscape and uses AI to generate novel research ideas from the gaps.
+*   **Real-time Intervention Knowledge Space:** Identifies interventions from literature, costs them, and maps both known and hypothetical synergies between them.
 *   **Scientific Validation Engine:** An AI pipeline that searches PubMed, patents, and preprints, validates primary sources, scores their reliability, and provides concise summaries.
 *   **Synergy Analysis Engine:** Analyzes validated literature to identify and score synergistic, additive, or antagonistic interactions between interventions (drugs, devices, and behaviors).
 *   **"Organoid Odyssey" Simulator:** An engaging simulation where users apply discovered combinations to virtual neural organoids and observe the effects on health and lifespan across four major theories of aging.
