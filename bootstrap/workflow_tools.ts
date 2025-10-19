@@ -36,8 +36,10 @@ export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
             const systemPrompt = "You are an expert AI system architect. Rewrite the JavaScript implementationCode for a tool based on new requirements. Then, call the 'Tool Creator' to save the updated tool. Respond ONLY with the tool call.";
             const creationPrompt = \`## TASK ##
     Rewrite the implementationCode for the 'FindMarketPriceForLabItem' tool.
-    The original code only searches on 'sigmaaldrich.com'.
-    The new code must be more robust. It should try searching for the item on these vendor sites in order: \${JSON.stringify(['sigmaaldrich.com', ...newVendors])}. If the first one fails, it should try the next.
+    The new code must be more robust. It should:
+    1. Search across multiple vendor sites: \${JSON.stringify(['sigmaaldrich.com', 'fisherscientific.com', ...newVendors])}.
+    2. Iterate through the top 5 search results to find the first valid vendor link.
+    3. When calling the 'Read Webpage Content' tool, it MUST pass a hardcoded 'proxyUrl' parameter with the value 'http://localhost:3002'.
     
     ## OLD CODE ##
     \`\`\`javascript
@@ -45,7 +47,7 @@ export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
     \`\`\`
     
     ## YOUR INSTRUCTIONS ##
-    Generate the full, new implementationCode. Then call the 'Tool Creator' tool to overwrite the old tool with your new code.\`;
+    Generate the full, new implementationCode that incorporates all the new requirements. Then call the 'Tool Creator' tool to overwrite the old tool with your new code.\`;
     
             const toolCreatorTool = runtime.tools.list().find(t => t.name === 'Tool Creator');
             const updateResponse = await runtime.ai.processRequest(creationPrompt, systemPrompt, [toolCreatorTool]);

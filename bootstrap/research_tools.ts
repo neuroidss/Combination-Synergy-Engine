@@ -18,45 +18,59 @@ export const RESEARCH_TOOLS: ToolCreatorPayload[] = [
                 return { success: true, rankedResults: [] };
             }
 
-            const systemInstruction = \`You are a research prioritization expert. Your task is to rank a list of scientific articles based on their relevance to a research objective.
-- Give the HIGHEST priority to titles containing "meta-analysis", "systematic review", or "review".
-- Give HIGH priority to articles that seem to directly address the core of the research objective.
-- Give LOWER priority to patents or highly specific, narrow studies unless they are exceptionally relevant.
-- You MUST respond with ONLY a single, valid JSON object containing a single key "ranked_titles", which is an array of the exact titles of the articles in their new, ranked order.
-- The returned list MUST contain all of the original titles, just reordered.\`;
-
-            const context = searchResults.map(r => \`Title: \${r.title}\\nSnippet: \${r.snippet}\`).join('\\n---\\n');
-            const prompt = \`Research Objective: "\${researchObjective}"\\n\\nRank the following articles based on the objective. Return a JSON object with the "ranked_titles" array.\\n\\nARTICLES:\\n\${context}\`;
-
-            const aiResponseText = await runtime.ai.generateText(prompt, systemInstruction);
+            runtime.logEvent(\`[Ranker] Ranking \${searchResults.length} results using embedding-based relevance scoring...\`);
 
             try {
-                const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
-                if (!jsonMatch) throw new Error("AI did not return a valid JSON object for ranking.");
-                const parsed = JSON.parse(jsonMatch[0]);
-                const rankedTitles = parsed.ranked_titles;
+                // 1. Prepare texts for embedding
+                const textsToEmbed = [
+                    researchObjective, // The first item is the query
+                    ...searchResults.map(r => \`\${r.title}\\n\${r.snippet}\`)
+                ];
 
-                if (!Array.isArray(rankedTitles)) {
-                    throw new Error("AI response did not contain a 'ranked_titles' array.");
-                }
+                // 2. Generate all embeddings in a single call
+                const embeddings = await runtime.ai.generateEmbeddings(textsToEmbed);
+                const objectiveEmbedding = embeddings[0];
+                const resultEmbeddings = embeddings.slice(1);
 
-                const titleToResultMap = new Map(searchResults.map(r => [r.title, r]));
-                const rankedResults = rankedTitles.map(title => titleToResultMap.get(title)).filter(Boolean);
-                
-                // Add any missing results to the end to ensure nothing is lost
-                const rankedUrls = new Set(rankedResults.map(r => r.link));
-                for (const result of searchResults) {
-                    if (!rankedUrls.has(result.link)) {
-                        rankedResults.push(result);
+                // Helper for cosine similarity
+                const cosineSimilarity = (vecA, vecB) => {
+                    if (!vecA || !vecB || vecA.length !== vecB.length) return 0;
+                    // Vectors are pre-normalized by the embedding service, so dot product is sufficient.
+                    let dotProduct = 0;
+                    for (let i = 0; i < vecA.length; i++) {
+                        dotProduct += vecA[i] * vecB[i];
                     }
-                }
+                    return dotProduct;
+                };
 
-                runtime.logEvent(\`[Ranker] ✅ Successfully ranked \${searchResults.length} articles.\`);
+                // 3. Score each result
+                const scoredResults = searchResults.map((result, index) => {
+                    // Base score from semantic similarity
+                    const similarityScore = cosineSimilarity(objectiveEmbedding, resultEmbeddings[index]);
+
+                    // Heuristic bonus for important keywords
+                    let heuristicBonus = 0;
+                    const lowerCaseTitle = result.title.toLowerCase();
+                    if (lowerCaseTitle.includes('meta-analysis') || lowerCaseTitle.includes('systematic review')) {
+                        heuristicBonus = 0.2; // Strong bonus for meta-analyses
+                    } else if (lowerCaseTitle.includes('review')) {
+                        heuristicBonus = 0.1; // Moderate bonus for reviews
+                    }
+
+                    const finalScore = similarityScore + heuristicBonus;
+                    
+                    return { ...result, score: finalScore };
+                });
+
+                // 4. Sort by final score
+                const rankedResults = scoredResults.sort((a, b) => b.score - a.score);
+
+                runtime.logEvent(\`[Ranker] ✅ Successfully ranked \${rankedResults.length} articles. Top result: "\${rankedResults[0]?.title}" (Score: \${rankedResults[0]?.score.toFixed(3)})\`);
                 return { success: true, rankedResults };
 
             } catch (e) {
-                runtime.logEvent(\`[Ranker] ⚠️ WARN: Failed to rank search results with AI: \${e.message}. Proceeding with original order.\`);
-                // Fallback: return the original order if AI fails
+                runtime.logEvent(\`[Ranker] ⚠️ WARN: Failed to rank search results with embeddings: \${e.message}. Proceeding with original order.\`);
+                // Fallback: return the original order if embedding fails
                 return { success: true, rankedResults: searchResults };
             }
         `
@@ -71,7 +85,7 @@ export const RESEARCH_TOOLS: ToolCreatorPayload[] = [
         implementationCode: `
             runtime.logEvent('[Discovery] Attempting to discover new CORS proxy strategies...');
             const systemInstruction = \`You are an expert at bypassing CORS. Your task is to find and provide code for public CORS proxy services.
-You MUST respond with ONLY a single, valid JSON object in the following format:
+You MUST respond with ONLY a single, valid JSON object. Do not add any text, explanations, or markdown formatting before or after the JSON object. The format must be:
 {
   "proxy_builder_strings": [
     "(url) => \\\`https://corsproxy.io/?\\\${encodeURIComponent(url)}\\\`",
@@ -173,9 +187,8 @@ Find 2-3 MORE different, currently active public CORS proxies and provide their 
 Based on the user's high-level objective and the key findings from the provided literature summaries, generate 3 to 5 high-level conceptual questions designed to uncover novel, unstated synergies.
 Frame these questions in the format of "Find a compound/intervention that achieves [DESIRED_EFFECT] while avoiding [UNDESIRED_EFFECT]" or "What is the relationship between [MECHANISM_A] and [MECHANISM_B] in the context of aging?".
 Your goal is to provoke non-obvious connections.
-You MUST respond with ONLY a single, valid JSON object in the following format:
-{ "conceptual_queries": ["query 1", "query 2", ...] }
-Do not add any other text or markdown.\`;
+You MUST respond with ONLY a single, valid JSON object. Do not add any text, explanations, or markdown formatting before or after the JSON object. The format must be:
+{ "conceptual_queries": ["query 1", "query 2", ...] }\`;
 
     const sourceSummaries = validatedSources.map(s => ({ title: s.title, summary: s.summary, reliability: s.reliabilityScore })).slice(0, 20); // Limit context size
 
@@ -185,7 +198,7 @@ Do not add any other text or markdown.\`;
     let queries = [];
     try {
         const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
-        if (!jsonMatch) throw new Error("No valid JSON response for conceptual queries.");
+        if (!jsonMatch) throw new Error("No valid JSON response for conceptual queries. Raw response: " + aiResponseText);
         const parsed = JSON.parse(jsonMatch[0]);
         queries = parsed.conceptual_queries;
         if (!Array.isArray(queries) || queries.length === 0) throw new Error("AI did not generate a valid array of conceptual queries.");
@@ -210,15 +223,14 @@ Do not add any other text or markdown.\`;
         implementationCode: `
         const { researchObjective, maxQueries = 5 } = args;
         const systemInstruction = \`You are an expert search query generation assistant. Your task is to break down a high-level research objective into specific, targeted search queries for scientific databases like PubMed.
-You MUST respond with ONLY a single, valid JSON object in the following format:
+You MUST respond with ONLY a single, valid JSON object. Do not add any text, explanations, or markdown formatting before or after the JSON object. The format must be:
 {
   "queries": [
     "query 1",
     "query 2",
     ...
   ]
-}
-Do not add any text, explanations, or markdown formatting like \\\`\\\`\\\`json before or after the JSON object.\`;
+}\`;
         
         const prompt = 'Based on the research objective "' + researchObjective + '", generate up to ' + maxQueries + ' specific search queries. Prioritize queries that might find synergistic interactions, contraindications, and novel applications.';
 
@@ -226,20 +238,11 @@ Do not add any text, explanations, or markdown formatting like \\\`\\\`\\\`json 
         try {
             const aiResponseText = await runtime.ai.generateText(prompt, systemInstruction);
             
-            // More robust JSON extraction
-            let jsonString = '';
-            const jsonBlockMatch = aiResponseText.match(/\\\`\\\`\\\`json\\s*([\\s\\S]*?)\\s*\\\`\\\`\\\`/);
-            if (jsonBlockMatch && jsonBlockMatch[1]) {
-                jsonString = jsonBlockMatch[1];
-            } else {
-                const rawJsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
-                if (rawJsonMatch) {
-                    jsonString = rawJsonMatch[0];
-                }
-            }
-            if (!jsonString) throw new Error("No JSON object or JSON code block found in the AI's response.");
+            const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
+            if (!jsonMatch) throw new Error("No JSON object found in the AI's response.");
+            
+            const parsedJson = JSON.parse(jsonMatch[0]);
 
-            const parsedJson = JSON.parse(jsonString);
             if (parsedJson && Array.isArray(parsedJson.queries)) {
                 queries = parsedJson.queries;
                 runtime.logEvent('[Refine Queries] ✅ Generated ' + queries.length + ' queries via primary JSON method.');
@@ -290,7 +293,7 @@ Do not add any text, explanations, or markdown formatting like \\\`\\\`\\\`json 
             runtime.logEvent('[Search Diagnosis] Analyzing failed query: "' + originalQuery.substring(0, 100) + '..."');
 
             const systemInstruction = \`You are a search query diagnostics expert. A search failed. Analyze the original query and research objective, then generate 3 alternative, broader, and more general search queries that are more likely to yield results.
-You MUST respond with ONLY a single, valid JSON object in the following format:
+You MUST respond with ONLY a single, valid JSON object. Do not add any text, explanations, or markdown formatting before or after the JSON object. The format must be:
 { "new_queries": ["query 1", "query 2", "query 3"] }\`;
 
             const prompt = 'The research objective is: "' + researchObjective + '". The following search query failed because: ' + reasonForFailure + '\\n\\nFailed Query:\\n"' + originalQuery + '"\\n\\nGenerate 3 broader alternative queries:';
@@ -299,7 +302,7 @@ You MUST respond with ONLY a single, valid JSON object in the following format:
             let newQueries = [];
             try {
                 const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
-                if (!jsonMatch) throw new Error("No valid JSON response for new queries.");
+                if (!jsonMatch) throw new Error("No valid JSON response for new queries. Raw response: " + aiResponseText);
                 const parsed = JSON.parse(jsonMatch[0]);
                 newQueries = parsed.new_queries;
                 if (!Array.isArray(newQueries) || newQueries.length === 0) throw new Error("AI did not generate a valid array of new queries.");
@@ -499,8 +502,11 @@ You MUST respond with ONLY a single, valid JSON object in the following format:
         const systemInstruction = \`You are an expert research assistant. Your task is to extract the titles of publications from the 'References' or 'Bibliography' section of a scientific paper.
 - Focus ONLY on the titles of the referenced works.
 - Exclude authors, journal names, page numbers, and years.
-- Return ONLY a JSON object with a single key "reference_titles", which is an array of strings. Each string must be a single, complete title.
-- If no references are found, return an empty array. Do not add any text outside the JSON object.\`;
+- You MUST respond with ONLY a single, valid JSON object. Do not add any text, explanations, or markdown formatting before or after the JSON object. The format must be:
+{
+  "reference_titles": ["The complete title of the first reference.", "The complete title of the second reference."]
+}
+- If no references are found, return an empty array.\`;
 
         const prompt = 'Here is the text of a scientific paper. Please extract the publication titles from its reference list at the end of the document.\\n\\n' + sourceContent.substring(0, 50000); // Truncate to avoid excessive token usage
 
@@ -509,7 +515,7 @@ You MUST respond with ONLY a single, valid JSON object in the following format:
         let responseJson;
         try {
             const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
-            if (!jsonMatch) throw new Error("No JSON object found in the AI's response.");
+            if (!jsonMatch) throw new Error("No JSON object found in the AI's response. Raw response: " + aiResponseText);
             responseJson = JSON.parse(jsonMatch[0]);
         } catch (e) {
             runtime.logEvent('[Extract Refs] ❌ Error parsing JSON. AI Response: ' + aiResponseText);

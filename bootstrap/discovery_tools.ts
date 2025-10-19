@@ -1,5 +1,4 @@
 
-
 import type { ToolCreatorPayload } from '../types';
 
 export const DISCOVERY_TOOLS: ToolCreatorPayload[] = [

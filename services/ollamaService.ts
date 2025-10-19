@@ -158,6 +158,7 @@ export const generateWithTools = async (
         tools: ollamaTools.length > 0 ? ollamaTools : undefined,
         options: {
             temperature: 0.1,
+            num_predict: 4096,
         },
     };
 
@@ -251,6 +252,7 @@ export const generateText = async (
         stream: false,
         options: {
             temperature: 0.0,
+            num_predict: 4096,
         },
     };
 

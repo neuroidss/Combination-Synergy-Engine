@@ -1,3 +1,5 @@
+
+
 // VIBE_NOTE: Do not escape backticks or dollar signs in template literals in this file.
 // Escaping is only for 'implementationCode' strings in tool definitions.
 import type { SearchDataSource, SearchResult } from '../types';
@@ -555,16 +557,7 @@ export const enrichSource = async (source: SearchResult, logEvent: (message: str
     if (isPubmedUrl && pubmedIdMatch && pubmedIdMatch[1]) {
         const pubmedId = pubmedIdMatch[1];
         
-        // --- Best Effort PMC URL Construction (Added for resilience) ---
-        // Manually construct a potential PMC URL. This is not guaranteed to be correct 
-        // for all IDs but adds a crucial fallback if the conversion API fails.
-        const bestEffortPmcUrl = buildCanonicalUrl(`PMC${pubmedId}`);
-        if (bestEffortPmcUrl) {
-            logEvent(`[Enricher] Adding best-effort guess for PMC URL to attempts: ${bestEffortPmcUrl}`);
-            urlsToTry.unshift(bestEffortPmcUrl);
-        }
-
-        // --- Official ID Converter API (Still preferred) ---
+        // --- Official ID Converter API (Preferred method) ---
         logEvent(`[Enricher] PubMed link detected. Attempting official conversion for PMID: ${pubmedId}`);
         try {
             const converterUrl = `https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/?ids=${pubmedId}&format=json`;
@@ -581,30 +574,74 @@ export const enrichSource = async (source: SearchResult, logEvent: (message: str
                         urlsToTry.splice(0, urlsToTry.length, ...Array.from(urlSet));
                     }
                 } else {
-                    logEvent(`[Enricher] No PMCID found via API for PMID ${pubmedId}. Will proceed with guessed PMC and original PubMed URLs.`);
+                    logEvent(`[Enricher] No PMCID found via API for PMID ${pubmedId}. Will proceed with original PubMed URL.`);
                 }
             } else {
-                logEvent(`[Enricher] WARN: ID Converter API failed with status ${converterResponse.status}. Will proceed with guessed PMC and original PubMed URLs.`);
+                logEvent(`[Enricher] WARN: ID Converter API failed with status ${converterResponse.status}. Will proceed with original PubMed URL.`);
             }
         } catch (e) {
-            logEvent(`[Enricher] WARN: ID Converter API call failed: ${e instanceof Error ? e.message : String(e)}. Will proceed with guessed PMC and original PubMed URLs.`);
+            logEvent(`[Enricher] WARN: ID Converter API call failed: ${e instanceof Error ? e.message : String(e)}. Will proceed with original PubMed URL.`);
         }
     }
     
+    const attemptedUrls = new Set<string>();
     let response: Response | null = null;
     let successfulUrl: string | null = null;
     let lastError: any = null;
+    let alternativeSourceSearchPerformed = false;
+    const urlQueue = [...new Set(urlsToTry)];
 
-    for (const url of [...new Set(urlsToTry)]) { // De-duplicate URLs before trying
+    while(urlQueue.length > 0) {
+        const url = urlQueue.shift()!;
+        if (attemptedUrls.has(url)) continue;
+
+        attemptedUrls.add(url);
         try {
             logEvent(`[Enricher] Attempting to scrape: ${url}`);
             response = await fetchWithCorsFallback(url, logEvent, proxyUrl);
             successfulUrl = url;
-            break; // Success, exit loop
+            break; // Success!
         } catch (error) {
             lastError = error;
             const message = error instanceof Error ? error.message : 'Unknown error';
             logEvent(`[Enricher] Attempt failed for ${url}: ${message}.`);
+        }
+    }
+
+    // If we've exhausted the initial URLs and still have no response, AND we haven't searched for alternatives yet...
+    if (!response && !alternativeSourceSearchPerformed) {
+        alternativeSourceSearchPerformed = true;
+        logEvent(`[Enricher] Initial fetch attempts failed. Searching for alternative sources for: "${source.title}"`);
+        try {
+            const alternativeResults = await searchWeb(`"${source.title}"`, logEvent, 5, proxyUrl);
+            const newUrls = alternativeResults.map(r => r.link).filter(link => !attemptedUrls.has(link));
+
+            if (newUrls.length > 0) {
+                logEvent(`[Enricher] Found ${newUrls.length} potential alternative URLs. Retrying fetch.`);
+                urlQueue.push(...newUrls);
+
+                // Re-run the loop for the new URLs
+                while(urlQueue.length > 0) {
+                    const url = urlQueue.shift()!;
+                    if (attemptedUrls.has(url)) continue;
+                    
+                    attemptedUrls.add(url);
+                    try {
+                        logEvent(`[Enricher] Attempting alternative source: ${url}`);
+                        response = await fetchWithCorsFallback(url, logEvent, proxyUrl);
+                        successfulUrl = url;
+                        break; // Success!
+                    } catch (error) {
+                        lastError = error;
+                        const message = error instanceof Error ? error.message : 'Unknown error';
+                        logEvent(`[Enricher] Alternative attempt failed for ${url}: ${message}.`);
+                    }
+                }
+            } else {
+                 logEvent(`[Enricher] No alternative sources found for "${source.title}".`);
+            }
+        } catch (searchError) {
+            logEvent(`[Enricher] WARN: Search for alternative sources failed: ${searchError instanceof Error ? searchError.message : String(searchError)}`);
         }
     }
 

@@ -165,6 +165,7 @@ export const generateWithTools = async (
             { role: 'user', content: userMessageContent }
         ],
         temperature: 0.1,
+        max_tokens: 4096,
         tools: openAITools.length > 0 ? openAITools : undefined,
         tool_choice: openAITools.length > 0 ? "auto" : undefined,
     };
@@ -271,6 +272,7 @@ export const generateText = async (
             { role: 'user', content: userMessageContent }
         ],
         temperature: 0.0,
+        max_tokens: 4096,
     };
     
     try {

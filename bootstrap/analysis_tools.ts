@@ -25,6 +25,7 @@ export const ANALYSIS_TOOLS: ToolCreatorPayload[] = [
 **Response Format:**
 - You MUST respond with ONLY a single, valid JSON object.
 - The JSON object must contain a single key "synergies", which is an array of synergy objects.
+- A "combination" MUST consist of two or more interventions. Never output a combination with only one item.
 - Each synergy object must have the following structure:
 {
   "combination": [{"name": "Intervention A", "type": "drug"}, {"name": "Intervention B", "type": "behavior"}],
@@ -33,7 +34,7 @@ export const ANALYSIS_TOOLS: ToolCreatorPayload[] = [
   "summary": "For KNOWN, summarize the finding from the paper. For HYPOTHETICAL, provide a plausible scientific rationale.",
   "potentialRisks": "Describe potential risks of the combination."
 }
-- Do not add any text or markdown outside the JSON object.\`;
+- Do not add any text, explanations, or markdown formatting before or after the JSON object.\`;
 
         const prompt = \`Based on the research objective "\${researchObjective}" and the following source, identify all potential synergies (both known and hypothetical) and return them as a JSON object.\\n\\nSOURCE TO ANALYZE:\\n\${sourceContext}\`;
 
@@ -47,8 +48,15 @@ export const ANALYSIS_TOOLS: ToolCreatorPayload[] = [
                  throw new Error("AI response did not contain a 'synergies' array.");
             }
             
-            runtime.logEvent(\`[Synergy Extractor] ✅ Extracted \${parsedResult.synergies.length} potential synergies from source.\`);
-            return { success: true, synergies: parsedResult.synergies };
+            // Filter out malformed single-item "synergies" from the AI output.
+            const validSynergies = parsedResult.synergies.filter(s => s.combination && Array.isArray(s.combination) && s.combination.length >= 2);
+            const removedCount = parsedResult.synergies.length - validSynergies.length;
+            if (removedCount > 0) {
+                runtime.logEvent(\`[Synergy Extractor] ⚠️ Filtered out \${removedCount} malformed single-item combinations from AI output.\`);
+            }
+
+            runtime.logEvent(\`[Synergy Extractor] ✅ Extracted \${validSynergies.length} potential synergies from source.\`);
+            return { success: true, synergies: validSynergies };
         } catch(e) {
             runtime.logEvent(\`[Synergy Extractor] ❌ Error parsing synergies from AI: \${e.message}\`);
             throw new Error('Failed to parse synergies from AI: ' + e.message + ' Raw response: ' + aiResponseText);
@@ -57,7 +65,7 @@ export const ANALYSIS_TOOLS: ToolCreatorPayload[] = [
     },
     {
         name: "FindMarketPriceForLabItem",
-        description: "Searches a major lab supplier (e.g., Sigma-Aldrich) for a specific lab item (chemical, kit) and attempts to extract its price in USD using web scraping and AI analysis. This tool is designed to be updatable.",
+        description: "Searches major lab suppliers for a specific lab item (chemical, kit) and attempts to extract its price in USD using web scraping and AI analysis. This tool is designed to be updatable.",
         category: "Functional",
         executionEnvironment: "Client",
         purpose: "To dynamically fetch real-world cost data for scientific materials, enabling on-the-fly, evidence-based cost estimation. Its implementation can be updated by the 'UpdatePricingModel' workflow.",
@@ -68,43 +76,68 @@ export const ANALYSIS_TOOLS: ToolCreatorPayload[] = [
             const { itemName } = args;
             runtime.logEvent(\`[Price Finder] Searching market price for: \${itemName}\`);
     
+            const VENDORS = ['sigmaaldrich.com', 'fisherscientific.com', 'thermofisher.com', 'scbt.com', 'vwr.com'];
+
             try {
-                // Stage 1: Search for the product page, starting with Sigma-Aldrich
-                const searchResults = await runtime.search.web(\`"sigma aldrich" \${itemName} price\`, 1);
-                if (!searchResults || searchResults.length === 0 || !searchResults[0].link.includes('sigmaaldrich.com')) {
-                    runtime.logEvent(\`[Price Finder] Could not find a product page on Sigma-Aldrich for \${itemName}.\`);
+                // Stage 1: Search for the product page across multiple trusted vendors
+                const searchResults = await runtime.search.web(\`"\${itemName}" price site:\${VENDORS.join(' OR site:')}\`, 5);
+                
+                let productUrl = null;
+                if (searchResults && searchResults.length > 0) {
+                    for (const result of searchResults) {
+                        try {
+                             if (result.link.toLowerCase().endsWith('.pdf')) {
+                                continue;
+                            }
+                            const hostname = new URL(result.link).hostname;
+                            if (VENDORS.some(v => hostname.includes(v))) {
+                                productUrl = result.link;
+                                break; // Found a valid vendor link
+                            }
+                        } catch (e) { /* ignore invalid URLs */ }
+                    }
+                }
+
+                if (!productUrl) {
+                    runtime.logEvent(\`[Price Finder] Could not find a product page on trusted vendors for \${itemName}.\`);
                     return { price: null };
                 }
-    
-                const productUrl = searchResults[0].link;
+
                 runtime.logEvent(\`[Price Finder] Found potential product page: \${productUrl}\`);
-    
-                // Stage 2: "Read" the page
-                const pageContentResult = await runtime.tools.run('Read Webpage Content', { url: productUrl });
+
+                // Stage 2: "Read" the page using the mandatory web proxy
+                const proxyUrl = 'http://localhost:3002'; // Hardcoded as this is a known, bootstrapped service
+                const pageContentResult = await runtime.tools.run('Read Webpage Content', { url: productUrl, proxyUrl });
                 const pageContent = pageContentResult.textContent;
-    
+
                 if (!pageContent) {
                     throw new Error("Failed to read content from product page.");
                 }
                 
                 // Stage 3: Ask the AI to extract the price from the text
-                const systemInstruction = \`You are an expert data extraction bot. Your only task is to find the price in USD from the provided text of a product webpage. Look for patterns like "$123.45" or "Price: 123.45 USD". If there are multiple prices, pick the smallest one. Respond with ONLY a single JSON object: {"price": 123.45} or {"price": null} if not found.\`;
+                const systemInstruction = \`You are an expert data extraction bot. Your only task is to find the price in USD from the provided text of a product webpage. Look for patterns like "$123.45" or "Price: 123.45 USD". If there are multiple prices for different quantities, pick the smallest one. You MUST respond with ONLY a single, valid JSON object. Do not add any text, explanations, or markdown. Your response format must be: {"price": 123.45} or {"price": null} if not found.\`;
                 const prompt = \`Extract the price in USD from this text:\\n\\n\${pageContent.substring(0, 15000)}\`;
-    
+
                 const aiResponseText = await runtime.ai.generateText(prompt, systemInstruction);
-                const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
-    
-                if (jsonMatch) {
-                    const parsedResult = JSON.parse(jsonMatch[0]);
-                    if (parsedResult && typeof parsedResult.price === 'number') {
-                        runtime.logEvent(\`[Price Finder] ✅ Found price for \${itemName}: $\${parsedResult.price}\`);
-                        return { price: parsedResult.price };
-                    }
+                
+                let parsedResult;
+                try {
+                    const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
+                    if (!jsonMatch) throw new Error("AI did not return a valid JSON object.");
+                    parsedResult = JSON.parse(jsonMatch[0]);
+                } catch(e) {
+                    runtime.logEvent(\`[Price Finder] ⚠️ Failed to parse price from AI for \${itemName}. AI response: \${aiResponseText}\`);
+                    return { price: null };
+                }
+
+                if (parsedResult && typeof parsedResult.price === 'number') {
+                    runtime.logEvent(\`[Price Finder] ✅ Found price for \${itemName}: $\${parsedResult.price}\`);
+                    return { price: parsedResult.price };
                 }
                 
                 runtime.logEvent(\`[Price Finder] Could not determine a price for \${itemName}.\`);
                 return { price: null };
-    
+
             } catch (e) {
                 runtime.logEvent(\`[Price Finder] ❌ Error fetching price for \${itemName}: \${e.message}\`);
                 return { price: null }; // Never break the main process
@@ -124,7 +157,7 @@ export const ANALYSIS_TOOLS: ToolCreatorPayload[] = [
             const { synergySummary } = args;
             const systemInstruction = \`You are an expert in geroscience and epigenetic clocks. Based on the scientific mechanism of a therapy, predict its likely impact on the biological age of specific organs.
     Impact values can be: 'High Positive', 'Moderate Positive', 'Low Positive', 'Negligible', 'Low Negative', 'Moderate Negative', 'High Negative'.
-    Respond with ONLY a single, valid JSON object in the following format:
+    You MUST respond with ONLY a single, valid JSON object. Do not add any text, explanations, or markdown formatting before or after the JSON object. The format must be:
     {
       "brain_impact": "High Positive",
       "liver_impact": "Moderate Positive",
@@ -137,7 +170,7 @@ export const ANALYSIS_TOOLS: ToolCreatorPayload[] = [
             const aiResponseText = await runtime.ai.generateText(prompt, systemInstruction);
             try {
                 const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
-                if (!jsonMatch) throw new Error("No valid JSON response from AI.");
+                if (!jsonMatch) throw new Error("No valid JSON response from AI. Raw response: " + aiResponseText);
                 const parsedResult = JSON.parse(jsonMatch[0]);
                 runtime.logEvent(\`[Organ Impact] Assessed organ-specific impact.\`);
                 return { success: true, organImpacts: parsedResult };
@@ -158,7 +191,7 @@ export const ANALYSIS_TOOLS: ToolCreatorPayload[] = [
         implementationCode: `
             const { hypotheticalAbstract } = args;
             const systemInstruction = \`You are a principal investigator designing a pilot experiment. Based on the hypothesis in the abstract, define the simplest possible in vitro experiment to get a 'go/no-go' signal.
-You MUST respond with ONLY a single, valid JSON object in the following format:
+You MUST respond with ONLY a single, valid JSON object. Do not add any text, explanations, or markdown formatting before or after the JSON object. The format must be:
 {
   "cell_model": "Human primary fibroblasts (HDFs)",
   "interventions": ["Compound X (10uM)", "Compound Y (5uM)", "Combination (X+Y)"],
@@ -175,7 +208,7 @@ You MUST respond with ONLY a single, valid JSON object in the following format:
             const aiResponseText = await runtime.ai.generateText(prompt, systemInstruction);
             try {
                 const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
-                if (!jsonMatch) throw new Error("No valid JSON response from AI for experiment plan.");
+                if (!jsonMatch) throw new Error("No valid JSON response from AI for experiment plan. Raw response: " + aiResponseText);
                 const parsedResult = JSON.parse(jsonMatch[0]);
                 runtime.logEvent('[Experiment Planner] ✅ Deconstructed hypothesis into concrete plan.');
                 return { success: true, experimentPlan: parsedResult };
@@ -352,7 +385,7 @@ You MUST respond with ONLY a single, valid JSON object in the following format:
 - Be specific. Name the key proteins, genes, and signaling pathways involved.
 - Describe the step-by-step chain of events.
 - Your explanation must be plausible and grounded in known biological principles.
-You MUST respond with ONLY a single, valid JSON object in the following format:
+You MUST respond with ONLY a single, valid JSON object. Do not add any text, explanations, or markdown formatting before or after the JSON object. The format must be:
 {
   "mechanistic_explanation": "1. Drug A enters the cell and inhibits protein X (e.g., mTORC1). \\\\n2. This inhibition leads to the dephosphorylation of protein Y (e.g., ULK1). \\\\n3. Simultaneously, Drug B activates enzyme Z (e.g., AMPK), which also phosphorylates ULK1 at a different site. \\\\n4. This dual-action on ULK1 hyper-activates the autophagy initiation complex, leading to a synergistic increase in autophagosome formation and enhanced clearance of senescent mitochondria."
 }\`;
@@ -362,7 +395,7 @@ You MUST respond with ONLY a single, valid JSON object in the following format:
             const aiResponseText = await runtime.ai.generateText(prompt, systemInstruction);
             try {
                 const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
-                if (!jsonMatch) throw new Error("Virtual Cell Validator AI did not return a valid JSON object.");
+                if (!jsonMatch) throw new Error("Virtual Cell Validator AI did not return a valid JSON object. Raw response: " + aiResponseText);
                 const parsed = JSON.parse(jsonMatch[0]);
                 
                 runtime.logEvent(\`[Virtual Cell] ✅ Mechanistic explanation generated for \${synergyCombination.join(' + ')}.\`);
@@ -627,7 +660,7 @@ return { success: true, embeddedSources };
 
     const systemInstruction = \`You are an expert bioinformatics researcher with a talent for synthesizing novel hypotheses from disparate data.
 Your task is to analyze the provided text fragments from multiple scientific papers and formulate a NEW synergistic therapeutic hypothesis that addresses the user's conceptual query.
-You MUST respond with ONLY a single, valid JSON object in the following format:
+You MUST respond with ONLY a single, valid JSON object. Do not add any text, explanations, or markdown formatting before or after the JSON object. The format must be:
 {
   "combination": [{"name": "Compound A", "type": "drug"}, {"name": "Lifestyle B", "type": "behavior"}],
   "summary": "The novel hypothesis is that combining Compound A, which targets pathway X, with Lifestyle B, which enhances process Y, will synergistically reduce Z.",
@@ -683,9 +716,8 @@ You MUST respond with ONLY a single, valid JSON object in the following format:
         const systemInstruction = \`You are a binary classification expert. Your task is to classify a scientific article as either a "Meta-Analysis/Review" or a "Primary Study".
 - "Meta-Analysis/Review" summarizes existing research (e.g., titles with "review", "meta-analysis", "systematic review").
 - "Primary Study" presents new data from a specific experiment.
-- You MUST respond with ONLY a single, valid JSON object in the following format:
-{ "classification": "Meta-Analysis/Review" } OR { "classification": "Primary Study" }
-Do not add any other text or markdown.\`;
+- You MUST respond with ONLY a single, valid JSON object. Do not add any text, explanations, or markdown formatting before or after the JSON object. The format must be:
+{ "classification": "Meta-Analysis/Review" } OR { "classification": "Primary Study" }\`;
 
         for (const source of validatedSources) {
             try {
@@ -694,7 +726,7 @@ Do not add any other text or markdown.\`;
                 
                 const aiResponseText = await runtime.ai.generateText(prompt, systemInstruction);
                 const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
-                if (!jsonMatch) throw new Error("No JSON object found in response.");
+                if (!jsonMatch) throw new Error("No JSON object found in response. Raw response: " + aiResponseText);
                 
                 const parsed = JSON.parse(jsonMatch[0]);
                 const classification = parsed.classification;
@@ -833,7 +865,7 @@ Do not add any other text or markdown.\`;
 
             // --- Step 1: Get MoA Complementarity Score ---
             const moaScoringSystemInstruction = \`You are an expert pharmacologist. Analyze the provided synergy information and its scientific context. Score the Mechanism of Action (MoA) complementarity on a scale of 0-100.
-            You MUST respond with ONLY a single, valid JSON object in the following format:
+            You MUST respond with ONLY a single, valid JSON object. Do not add any text, explanations, or markdown formatting before or after the JSON object. The format must be:
             {
               "score": 85,
               "justification": "Component A targets the mTOR pathway, while Component B enhances autophagy via AMPK activation. This is highly complementary."
@@ -866,7 +898,7 @@ Do not add any other text or markdown.\`;
 
             const theoryScoringSystemInstruction = \`You are an expert longevity scientist and VC. Analyze a therapeutic synergy to evaluate its clinical trial potential.
     Calculate a final "Trial Priority Score" based on all available data.
-    You MUST respond with ONLY a single, valid JSON object in the following format:
+    You MUST respond with ONLY a single, valid JSON object. Do not add any text, explanations, or markdown formatting before or after the JSON object. The format must be:
     {
       "trialPriorityScore": 88,
       "theoryAlignmentScores": { "stochastic": 90, "hyperfunction": 75, "information": 50, "social": 95 },
@@ -921,7 +953,7 @@ Do not add any other text or markdown.\`;
         implementationCode: `
             const { synergy, backgroundSources } = args;
             const systemInstruction = \`You are a senior biotech investment analyst. Create the core narrative for an investment dossier.
-You MUST respond with ONLY a single, valid JSON object in the following format:
+You MUST respond with ONLY a single, valid JSON object. Do not add any text, explanations, or markdown formatting before or after the JSON object. The format must be:
 {
   "executiveSummary": "A high-level summary for investors.",
   "scientificRationale": "A detailed explanation of the biological mechanism and synergy, grounded in the provided literature."
@@ -931,7 +963,7 @@ You MUST respond with ONLY a single, valid JSON object in the following format:
             const aiResponseText = await runtime.ai.generateText(prompt, systemInstruction);
             try {
                 const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
-                if (!jsonMatch) throw new Error("Narrative generation AI did not return valid JSON.");
+                if (!jsonMatch) throw new Error("Narrative generation AI did not return valid JSON. Raw response: " + aiResponseText);
                 return JSON.parse(jsonMatch[0]);
             } catch (e) {
                 throw new Error(\`Failed to parse narrative sections: \${e.message}\`);
@@ -952,7 +984,7 @@ You MUST respond with ONLY a single, valid JSON object in the following format:
         implementationCode: `
             const { synergy, scientificRationale, backgroundSources } = args;
             const systemInstruction = \`You are a skeptical biotech risk analyst. Your task is to perform a structured risk analysis.
-You MUST respond with ONLY a single, valid JSON object in the following format:
+You MUST respond with ONLY a single, valid JSON object. Do not add any text, explanations, or markdown formatting before or after the JSON object. The format must be:
 {
   "riskAnalysis": {
     "scientificRisk": 30,
@@ -967,7 +999,7 @@ You MUST respond with ONLY a single, valid JSON object in the following format:
             const aiResponseText = await runtime.ai.generateText(prompt, systemInstruction);
             try {
                 const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
-                if (!jsonMatch) throw new Error("Risk analysis AI did not return valid JSON.");
+                if (!jsonMatch) throw new Error("Risk analysis AI did not return valid JSON. Raw response: " + aiResponseText);
                 return JSON.parse(jsonMatch[0]);
             } catch (e) {
                 throw new Error(\`Failed to parse risk analysis: \${e.message}\`);
@@ -987,7 +1019,7 @@ You MUST respond with ONLY a single, valid JSON object in the following format:
         implementationCode: `
             const { riskSummary, synergy } = args;
             const systemInstruction = \`You are a biotech project manager. Based on the key risks, create a de-risking plan and roadmap.
-You MUST respond with ONLY a single, valid JSON object in the following format:
+You MUST respond with ONLY a single, valid JSON object. Do not add any text, explanations, or markdown formatting before or after the JSON object. The format must be:
 {
   "mitigationPlan": "Conduct 12-month mouse longevity study and advanced toxicology screens.",
   "estimatedCostUSD": 150000,
@@ -998,7 +1030,7 @@ You MUST respond with ONLY a single, valid JSON object in the following format:
             const aiResponseText = await runtime.ai.generateText(prompt, systemInstruction);
             try {
                 const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
-                if (!jsonMatch) throw new Error("Mitigation plan AI did not return valid JSON.");
+                if (!jsonMatch) throw new Error("Mitigation plan AI did not return valid JSON. Raw response: " + aiResponseText);
                 return JSON.parse(jsonMatch[0]);
             } catch (e) {
                 throw new Error(\`Failed to parse mitigation plan: \${e.message}\`);
@@ -1018,7 +1050,7 @@ You MUST respond with ONLY a single, valid JSON object in the following format:
         implementationCode: `
             const { synergy, researchObjective } = args;
             const systemInstruction = \`You are a biotech market analyst. Analyze the market and IP landscape.
-You MUST respond with ONLY a single, valid JSON object in the following format:
+You MUST respond with ONLY a single, valid JSON object. Do not add any text, explanations, or markdown formatting before or after the JSON object. The format must be:
 {
   "marketAndIP": "The market for [\${researchObjective}] is estimated at $XB. While Compound A is off-patent, the combination therapy could be patentable via a new use-case or formulation patent..."
 }\`;
@@ -1027,7 +1059,7 @@ You MUST respond with ONLY a single, valid JSON object in the following format:
             const aiResponseText = await runtime.ai.generateText(prompt, systemInstruction);
             try {
                 const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
-                if (!jsonMatch) throw new Error("Market analysis AI did not return valid JSON.");
+                if (!jsonMatch) throw new Error("Market analysis AI did not return valid JSON. Raw response: " + aiResponseText);
                 return JSON.parse(jsonMatch[0]);
             } catch (e) {
                 throw new Error(\`Failed to parse market analysis: \${e.message}\`);
@@ -1159,31 +1191,77 @@ You MUST respond with ONLY a single, valid JSON object in the following format:
         }
 
         const systemInstruction = \`You are a highly skeptical and meticulous scientific peer reviewer. Your job is to find flaws in investment proposals.
--   Analyze the provided dossier and any search evidence.
--   Your tone should be critical, professional, and evidence-based.
--   Focus on: 1) Understated risks. 2) Weaknesses in the scientific rationale. 3) Contradictory evidence. 4) Feasibility.
--   You MUST respond with ONLY a single, valid JSON object with the following keys: "strengths", "weaknesses", "contradictoryEvidence" (an array of strings), and "overallVerdict" (one of "Sound", "Needs Revision", or "High Risk").\`;
-
-        runtime.logEvent('[Critique] Generating critique for ' + comboString + '...');
-        const aiResponseText = await runtime.ai.generateText(context, systemInstruction);
+- Analyze the provided dossier and any search evidence.
+- Your tone should be critical, professional, and evidence-based. Be concise.
+- Focus on: 1) Understated risks. 2) Weaknesses in the scientific rationale. 3) Contradictory evidence. 4) Feasibility.
+- You MUST respond with ONLY a single, valid JSON object. Do not add any text, explanations, or markdown formatting before or after the JSON object. The format must be:
+{
+  "strengths": "A summary of the proposal's strong points.",
+  "weaknesses": "A summary of the proposal's weaknesses and understated risks.",
+  "contradictoryEvidence": ["A list of strings, where each string is a piece of evidence that contradicts the proposal."],
+  "overallVerdict": "One of: 'Sound', 'Needs Revision', or 'High Risk'."
+}\`;
 
         let critiqueData;
-        try {
-            const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
-            if (!jsonMatch) throw new Error("AI did not return a valid JSON object for the critique.");
-            critiqueData = JSON.parse(jsonMatch[0]);
-        } catch (e) {
-            runtime.logEvent('[Critique] ❌ Error parsing JSON from critique AI. Response: ' + aiResponseText);
-            throw new Error("Failed to parse critique from AI: " + e.message);
+        let lastError = null;
+        let lastRawResponse = '';
+        const maxRetries = 2;
+
+        for (let i = 0; i < maxRetries; i++) {
+            try {
+                let currentPrompt = context;
+                if (i > 0 && lastError) {
+                    currentPrompt = \`Your previous attempt to generate a critique failed.
+        ERROR: \${lastError.message}
+        PREVIOUS (INVALID) RESPONSE:
+        \${lastRawResponse}
+
+        Please correct your output and provide ONLY a single, valid JSON object that strictly adheres to the requested format.
+
+        ORIGINAL REQUEST:
+        \${context}\`;
+                }
+
+                runtime.logEvent(\`[Critique] Generating critique for \${comboString} (Attempt \${i + 1}/\${maxRetries})...\`);
+                const aiResponseText = await runtime.ai.generateText(currentPrompt, systemInstruction);
+                lastRawResponse = aiResponseText;
+
+                const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
+                if (!jsonMatch) {
+                    throw new Error("AI did not return a valid JSON object.");
+                }
+                
+                const parsedJson = JSON.parse(jsonMatch[0]);
+
+                const strengths = parsedJson.strengths;
+                const weaknesses = parsedJson.weaknesses;
+                const contradictoryEvidence = parsedJson.contradictoryEvidence || parsedJson.contradictions || [];
+                const overallVerdict = parsedJson.overallVerdict;
+
+                if (!strengths || !weaknesses || !overallVerdict) {
+                    throw new Error("Parsed JSON is missing one or more required fields: 'strengths', 'weaknesses', 'overallVerdict'.");
+                }
+                
+                critiqueData = { strengths, weaknesses, contradictoryEvidence, overallVerdict };
+                lastError = null;
+                break; 
+            } catch (e) {
+                lastError = e;
+                runtime.logEvent(\`[Critique] ⚠️ Attempt \${i + 1} failed: \${e.message}\`);
+            }
         }
 
-        // Manually add the combination to the data, as the AI no longer needs to.
-        const fullCritiqueArgs = {
-            ...critiqueData,
-            combination: dossier.combination,
-        };
+        if (lastError) {
+            runtime.logEvent(\`[Critique] ❌ Error parsing JSON from critique AI after \${maxRetries} attempts. Generating a fallback critique. Final error: \${lastError.message}\`);
+            critiqueData = {
+                strengths: "Critique generation failed.",
+                weaknesses: \`The AI model failed to return a valid structured critique after \${maxRetries} attempts. This may indicate a model limitation or a persistent error. Final error: \${lastError.message}\`,
+                contradictoryEvidence: [],
+                overallVerdict: "Needs Revision"
+            };
+        }
 
-        // Now, manually call the 'RecordCritique' tool.
+        const fullCritiqueArgs = { ...critiqueData, combination: dossier.combination };
         const critiqueResult = await runtime.tools.run('RecordCritique', fullCritiqueArgs);
 
         return { success: true, message: 'Critique generated for ' + comboString, critique: critiqueResult.critique };
