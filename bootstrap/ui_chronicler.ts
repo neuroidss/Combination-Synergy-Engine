@@ -252,7 +252,7 @@ const ChroniclerView = ({ eventLog, runtime, selectedTtsVoice, selectedTtsLang, 
         if (!audio.gain) {
             audio.gain = audioCtx.createGain();
             audio.gain.connect(audioCtx.destination);
-            audio.gain.gain.setValueAtTime(0, audioCtx.currentTime);
+            audio.gain.gain.value = 0; // Set initial value directly
         }
         if (!audio.osc1) {
             audio.osc1 = audioCtx.createOscillator();
@@ -283,6 +283,8 @@ const ChroniclerView = ({ eventLog, runtime, selectedTtsVoice, selectedTtsLang, 
         if (isChroniclerActive) {
             targetVolume = isSpeaking ? 0.08 : 0.20;
         }
+        // Cancel any pending ramps and then schedule the new one for robustness.
+        audio.gain.gain.cancelScheduledValues(audioCtx.currentTime);
         audio.gain.gain.linearRampToValueAtTime(targetVolume, audioCtx.currentTime + 1.5);
 
     }, [isChroniclerActive, isSpeaking, currentMood]);
@@ -324,8 +326,8 @@ const ChroniclerView = ({ eventLog, runtime, selectedTtsVoice, selectedTtsLang, 
 
         // If it's the first render, or if the user was near the bottom before the update...
         if (prevScrollHeight === null || (container.scrollTop >= prevScrollHeight - container.clientHeight - scrollThreshold)) {
-            // ...then scroll to the bottom of the new content.
-            logEndRef.current?.scrollIntoView({ behavior: "smooth", block: 'end' });
+            // ...then scroll to the bottom of the new content, instantly.
+            logEndRef.current?.scrollIntoView({ block: 'end' });
         }
 
         // After we're done, store the *new* scroll height for the next update cycle.

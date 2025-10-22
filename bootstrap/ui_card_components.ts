@@ -259,6 +259,53 @@ export const UI_CARD_COMPONENTS_CODE = `
         </div>
     );
 
+    const RCTProtocolDisplay = ({ protocol, isExpanded }) => {
+        if (!protocol) return null;
+        
+        return (
+            <details className="bg-black/30 rounded-lg border border-purple-500/50 group" open={isExpanded}>
+                <summary className="cursor-pointer list-none bg-purple-900/40 p-3 flex items-center justify-between gap-4">
+                    <h4 className="font-bold text-purple-300 text-lg">Trial-Ready Protocol (Minimal Viable RCT)</h4>
+                    <p className="text-xs text-slate-400 flex-grow truncate">{protocol.title}</p>
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-slate-400 transition-transform group-open:rotate-180 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                </summary>
+                <div className="p-3 space-y-3 text-sm">
+                   <div>
+                        <h5 className="font-semibold text-slate-300">Design & Objective</h5>
+                        <p className="text-slate-400 pl-2 border-l-2 border-purple-700"><strong>Objective:</strong> {protocol.objective}</p>
+                        <p className="text-slate-400 pl-2 border-l-2 border-purple-700"><strong>Design:</strong> {protocol.design}</p>
+                    </div>
+                    <div>
+                        <h5 className="font-semibold text-slate-300">Key Endpoints</h5>
+                        <p className="text-slate-400 pl-2 border-l-2 border-purple-700"><strong>Primary:</strong> {protocol.primaryEndpoint}</p>
+                        <p className="text-slate-400 pl-2 border-l-2 border-purple-700"><strong>Secondary:</strong> {(protocol.secondaryEndpoints || []).join('; ')}</p>
+                    </div>
+                    <div>
+                        <h5 className="font-semibold text-slate-300">Population & Logistics</h5>
+                        <p className="text-slate-400 pl-2 border-l-2 border-purple-700"><strong>Sample Size (N):</strong> {protocol.sampleSize} | <strong>Duration:</strong> {protocol.durationWeeks} weeks</p>
+                        <details className="text-xs text-slate-400 ml-2 mt-1">
+                             <summary className="cursor-pointer text-cyan-400 hover:underline list-none flex items-center gap-1">Inclusion Criteria <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg></summary>
+                             <ul className="list-disc list-inside">
+                                 {(protocol.population.inclusion || []).map((c, i) => <li key={i}>{c}</li>)}
+                             </ul>
+                        </details>
+                    </div>
+                    <details className="text-xs text-slate-400 bg-slate-900/70 p-2 rounded border border-slate-700/50">
+                        <summary className="cursor-pointer font-semibold text-cyan-300 list-none flex items-center justify-between">
+                            Arms & Dosing Details
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-slate-400 transition-transform group-open:rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                        </summary>
+                        <ul className="mt-2 space-y-1">
+                            {(protocol.arms || []).map((arm, i) => (
+                                <li key={i} className="border-l-2 border-purple-500 pl-2"><strong>{arm.name}:</strong> {arm.description}</li>
+                            ))}
+                        </ul>
+                    </details>
+                </div>
+            </details>
+        );
+    };
+
     const DossierCard = ({ dossier, onShowHistory, critique }) => {
         const [isFullyExpanded, setIsFullyExpanded] = React.useState(false);
         const synergy = dossier.synergyData || {};
@@ -383,6 +430,8 @@ export const UI_CARD_COMPONENTS_CODE = `
                         </div>
                     </details>
                 )}
+                
+                <RCTProtocolDisplay protocol={dossier.rctProtocol} isExpanded={isFullyExpanded} />
 
                 {/* --- Section III: Risk Map --- */}
                 <details className="bg-black/30 rounded-lg border border-red-500/50 group" open={isFullyExpanded}>
@@ -441,7 +490,7 @@ export const UI_CARD_COMPONENTS_CODE = `
                                             <div className="font-semibold text-purple-300 mb-1">"Course Corrections" (Improvements)</div>
                                             <ul className="list-disc list-inside text-slate-300 space-y-1">
                                                 {(risk.navigation_protocol?.course_corrections || []).map((alt, j) => (
-                                                    <li key={j} title={alt.improvement_hypothesis}><strong>{alt.strategy}:</strong> {alt.description}</li>
+                                                    <li key={j} title={alt.mechanistic_justification}><strong>{alt.strategy}:</strong> {alt.description}</li>
                                                 ))}
                                             </ul>
                                         </div>

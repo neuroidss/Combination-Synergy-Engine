@@ -475,4 +475,60 @@ You MUST respond with ONLY a single, valid JSON object in the format:
             return { success: true, rankedSynergies };
         `
     },
+    {
+        name: "GenerateMinimalViableRCT",
+        description: "Generates a concise, IRB-ready protocol for a minimal viable randomized controlled trial (RCT) to validate a synergistic longevity combination.",
+        category: "Functional",
+        executionEnvironment: "Client",
+        purpose: "To transform a high-priority synergy hypothesis into an actionable, cost-effective clinical trial design with clear endpoints, population, and biomarkers.",
+        parameters: [
+            { name: "combination", type: "array", description: "Array of intervention objects with 'name' and 'type'.", required: true },
+            { name: "mechanismSummary", type: "string", description: "The mechanistic rationale for the synergy.", required: true },
+            { name: "targetIndication", type: "string", description: "The specific disease or condition being targeted (e.g., 'Sarcopenia').", required: true },
+            { name: "userAgingVector", type: "object", description: "Optional. User's biological aging profile to personalize inclusion criteria.", required: false }
+        ],
+        implementationCode: `
+            const { combination, mechanismSummary, targetIndication, userAgingVector } = args;
+            const comboString = combination.map(c => c.name).join(' + ');
+            const systemInstruction = \`You are a principal investigator and regulatory affairs expert designing a pilot RCT.
+Your task is to create a concise, IRB-ready protocol with the following sections:
+1. **Study Title**
+2. **Primary Objective**
+3. **Study Design** (e.g., randomized, double-blind, placebo-controlled)
+4. **Target Population & Inclusion/Exclusion Criteria** (Be specific. If a user aging vector is provided, use it to define biomarker-based criteria.)
+5. **Intervention Arms** (Detail dose, frequency, duration for each component)
+6. **Primary Endpoint** (Must be a single, measurable, clinically relevant outcome)
+7. **Key Secondary Endpoints & Biomarkers** (Include 2-4 mechanistic biomarkers tied to the MoA)
+8. **Sample Size Justification & Duration**
+9. **Statistical Analysis Plan** (Brief)
+
+You MUST respond with ONLY a single, valid JSON object in this exact format:
+{
+  "title": "...",
+  "objective": "...",
+  "design": "...",
+  "population": { "inclusion": ["...", "..."], "exclusion": ["...", "..."] },
+  "arms": [{ "name": "...", "description": "..." }],
+  "primaryEndpoint": "...",
+  "secondaryEndpoints": ["...", "..."],
+  "sampleSize": 0,
+  "durationWeeks": 0,
+  "statisticalPlan": "..."
+}\`;
+            const prompt = \`Design a minimal viable RCT for the combination: \${comboString}.
+Mechanistic Rationale: "\${mechanismSummary}"
+Target Indication: \${targetIndication}
+\${userAgingVector ? \`User Aging Profile (use for personalization): \${JSON.stringify(userAgingVector)}\` : ''}\`;
+            const aiResponseText = await runtime.ai.generateText(prompt, systemInstruction);
+            try {
+                const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
+                if (!jsonMatch) throw new Error("No valid JSON RCT protocol found in AI response.");
+                const protocol = JSON.parse(jsonMatch[0]);
+                runtime.logEvent(\`[RCT Designer] ✅ Generated IRB-ready protocol for \${comboString}.\`);
+                return { success: true, rctProtocol: protocol };
+            } catch (e) {
+                throw new Error(\`Failed to generate RCT protocol: \${e.message}\`);
+            }
+        `
+    },
 ];

@@ -187,7 +187,7 @@ You MUST respond with ONLY a single, valid JSON object in the format:
                 const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
                 if (!jsonMatch) throw new Error("No valid JSON response for synergistic threats.");
                 const parsed = JSON.parse(jsonMatch[0]);
-                runtime.logEvent(\`[Risk Engine] ✅ Mapped Layer 2 "Hidden Currents" (\${(parsed.synergistic_threats || []).length} threats) and Layer 3 "Chthonic Threats" (\${(parsed.existential_threats || []).length} scenarios).\`);
+                runtime.logEvent(\`[Risk Engineer] ✅ Mapped Layer 2 "Hidden Currents" (\${(parsed.synergistic_threats || []).length} threats) and Layer 3 "Chthonic Threats" (\${(parsed.existential_threats || []).length} scenarios).\`);
                 return { success: true, synergisticThreats: parsed.synergistic_threats, existentialThreats: parsed.existential_threats };
             } catch (e) {
                 throw new Error(\`Failed to parse synergistic threats: \${e.message}\`);
@@ -196,10 +196,10 @@ You MUST respond with ONLY a single, valid JSON object in the format:
     },
     {
         name: 'ProposeEngineeringSolutions',
-        description: 'For a single, specific biological threat (from any risk layer), this tool devises a complete "Navigation Protocol": a "Signal Beacon" (cheap validation test) and a "Course Correction" (an improved version of the hypothesis to mitigate the risk).',
+        description: 'For a single, specific biological threat, this tool devises a "Navigation Protocol" by synergizing first-principles reasoning with a targeted literature search to propose a "Signal Beacon" (early test) and a "Course Correction" (mitigation strategy).',
         category: 'Functional',
         executionEnvironment: 'Client',
-        purpose: 'To transform an abstract risk into a manageable engineering problem with a clear validation path and concrete backup plans, making the riskiest paths navigable.',
+        purpose: 'To transform an abstract risk into a manageable engineering problem with a clear validation path and evidence-backed mitigation plans.',
         parameters: [
             { name: 'riskName', type: 'string', description: 'The name of the specific biological risk to analyze.', required: true },
             { name: 'riskMechanism', type: 'string', description: 'The molecular mechanism, "synergy factor", or long-term scenario that causes the risk.', required: true }
@@ -207,23 +207,28 @@ You MUST respond with ONLY a single, valid JSON object in the format:
         implementationCode: `
             const { riskName, riskMechanism } = args;
 
-            // Step 1: Search for mitigation strategies
-            runtime.logEvent(\`[Risk Engineer] Searching for mitigation strategies for risk: "\${riskName}"\`);
-            const searchQuery = \`mitigation strategies for "\${riskName}" OR "how to prevent \${riskName}" review\`;
+            // Step 1: Perform a targeted search for mitigation strategies.
+            runtime.logEvent(\`[Risk Engineer] Searching literature for mitigation strategies for: "\${riskName}"\`);
+            const searchQuery = \`("\${riskName}" AND "\${riskMechanism}") OR "how to prevent \${riskName}" mitigation review\`;
             const searchResult = await runtime.tools.run('Federated Scientific Search', { query: searchQuery, maxResultsPerSource: 3 });
             const searchSnippets = searchResult.searchResults || [];
 
-            let contextString = "No specific mitigation strategies found in a quick search. Propose solutions based on first principles of the mechanism.";
+            let contextString = "No specific mitigation strategies found in the literature. Solutions must be proposed from first principles based on the provided risk mechanism.";
             if (searchSnippets.length > 0) {
-                contextString = "Based EXCLUSIVELY on the following search result snippets, propose solutions.\\n\\n" +
+                contextString = "Based on your expert knowledge AND the following search results, propose solutions. Prioritize solutions supported by the literature.\\n\\n" +
                     searchSnippets.map((s, i) => \`SNIPPET \${i+1} (Source: \${s.title}):\\n"\${s.snippet}"\`).join('\\n\\n');
             }
-
-            const systemInstruction = \`You are an expert preclinical research engineer. For a given biological threat, design a "Navigation Protocol" based *only* on the provided context.
+            
+            // Step 2: Use AI to synthesize a solution from both its knowledge and the search context.
+            const systemInstruction = \`You are an expert preclinical research engineer and a literature analysis specialist. Your task is to devise a "Navigation Protocol" by synergizing your first-principles knowledge of biology with the provided search result snippets.
 
 **PROTOCOL:**
 1.  **"Signal Beacon" (Early Test):** Propose a standard, low-cost in-vitro assay that acts as an early warning for the specific threat mechanism.
-2.  **"Course Correction" (Improvement):** Propose a practical improvement based on the provided snippets. Consider strategies like: modifying dosing, changing administration time, or adding a supplement mentioned in the context to counteract the risk. For each correction, cite which snippet it's based on.
+2.  **"Go/No-Go Criteria":** Define a clear, quantitative threshold for this test to abort the experiment.
+3.  **"Course Corrections" (Improvements):** Propose 1-2 practical improvements.
+    - **PRIORITY 1:** Find a solution directly mentioned or hinted at in the search snippets. For each, cite which snippet it's based on.
+    - **PRIORITY 2 (Fallback):** If no solution is found in the literature, you MUST reason from the provided 'riskMechanism' to propose a novel, mechanistically-plausible solution. Clearly state that this is a novel proposal based on first principles.
+    - Do NOT suggest generic antioxidants (like NAC) or L-Carnitine unless they are explicitly justified by the mechanism or a search snippet.
 
 **RESPONSE FORMAT:**
 You MUST respond with ONLY a single, valid JSON object in the format:
@@ -235,21 +240,24 @@ You MUST respond with ONLY a single, valid JSON object in the format:
   "go_no_go_criteria": "A clear, quantitative threshold for this test to abort the experiment.",
   "course_corrections": [
     {
-      "strategy": "High-level strategy (e.g., 'Introduce Counteracting Agent').",
-      "description": "Specific implementation of the strategy (e.g., 'Add L-Carnitine...').",
-      "justification": "The scientific reason this works, citing the source snippet (e.g., 'Based on SNIPPET 2, L-Carnitine boosts mitochondrial biogenesis...')."
+      "strategy": "High-level strategy (e.g., 'Introduce Metabolic Support').",
+      "description": "Specific implementation of the strategy (e.g., 'Add Nicotinamide Riboside (NR) to restore NAD+ levels.').",
+      "mechanistic_justification": "The direct scientific link, citing search snippets (e.g., 'Based on SNIPPET 2...') or stating 'Proposed from first principles.'."
     }
   ]
 }\`;
 
-            const prompt = \`Design a Navigation Protocol for the following threat, using the provided context.\\n\\nRISK: \${riskName}\\nMECHANISM/SCENARIO: \${riskMechanism}\\n\\nCONTEXT:\\n\${contextString}\`;
+            const prompt = \`Design a Navigation Protocol for the following threat, using the provided context and mechanism.\\n
+RISK: \${riskName}
+MECHANISM/SCENARIO: \${riskMechanism}
+LITERATURE CONTEXT:\\n\${contextString}\`;
 
             const aiResponseText = await runtime.ai.generateText(prompt, systemInstruction);
             try {
                 const jsonMatch = aiResponseText.match(/\\{[\\s\\S]*\\}/);
                 if (!jsonMatch) throw new Error("No valid JSON response for engineering solutions.");
                 const parsed = JSON.parse(jsonMatch[0]);
-                runtime.logEvent(\`[Risk Engine] ✅ Devised Navigation Protocol for risk: \${args.riskName}\`);
+                runtime.logEvent(\`[Risk Engineer] ✅ Devised Navigation Protocol for risk: \${args.riskName}\`);
                 return { success: true, navigationProtocol: parsed };
             } catch (e) {
                 throw new Error(\`Failed to parse engineering solutions: \${e.message}\`);
@@ -288,6 +296,24 @@ You MUST respond with ONLY a single, valid JSON object in the format:
                 runtime.logEvent(\`[Dossier Engine] ⚠️ Could not generate commercial outlook: \${commercialError.message}\`);
                 commercialData = { targetIndication: 'Analysis Failed', marketData: { tam: 'N/A' }, ipStrategy: { type: 'N/A' } };
             }
+
+            // --- NEW: Generate RCT Protocol (only for high-priority proposals) ---
+            let rctProtocol = null;
+            if (synergy.trialPriorityScore > 80 || synergy.status.includes('De Novo')) {
+                try {
+                    const rctResult = await runtime.tools.run('GenerateMinimalViableRCT', {
+                        combination: synergy.combination,
+                        mechanismSummary: synergy.summary || synergy.moaJustification,
+                        targetIndication: commercialData.targetIndication || 'N/A',
+                        // Omitted userAgingVector for now as it's not universally available in runtime state
+                    });
+                    rctProtocol = rctResult.rctProtocol;
+                    runtime.logEvent(\`[Dossier Engine] ✅ Generated RCT protocol for \${comboString}\`);
+                } catch (rctError) {
+                    runtime.logEvent(\`[Dossier Engine] ⚠️ Could not generate RCT protocol: \${rctError.message}\`);
+                }
+            }
+
 
             // Step 3 (Assemble): Combine all identified risks into one list
             const allIdentifiedRisks = [];
@@ -365,6 +391,7 @@ You MUST respond with ONLY a single, valid JSON object in the format:
                 riskDossier: riskDossier,
                 commercializationOutlook: commercialData,
                 backgroundSources: backgroundSources,
+                rctProtocol: rctProtocol,
             };
             
             const recordResult = await runtime.tools.run('RecordTrialDossier', finalDossierData);
