@@ -1,4 +1,3 @@
-
 import { UI_CARD_COMPONENTS_CODE } from './ui_card_components';
 
 export const MAIN_PANEL_CODE = `
@@ -118,63 +117,6 @@ const handleStart = () => {
         });
     }
 };
-
-const handleToggleChronicler = async () => {
-    if (!isChroniclerActive) {
-        runtime.logEvent("[Chronicler] User action detected. Priming audio systems...");
-
-        // Prime speech synthesis
-        window.speechSynthesis.cancel();
-        const voices = window.speechSynthesis.getVoices(); 
-        if (voices.length > 0) {
-            runtime.logEvent("[Chronicler] ✅ Speech synthesis primed successfully.");
-        } else {
-            await new Promise(resolve => setTimeout(resolve, 100));
-            if (window.speechSynthesis.getVoices().length > 0) {
-                 runtime.logEvent("[Chronicler] ✅ Speech synthesis primed successfully after short delay.");
-            } else {
-                runtime.logEvent("[Chronicler] ⚠️ WARN: Speech synthesis voices not available. Narration may not work.");
-            }
-        }
-        
-        // Prime Web Audio API for ambient music
-        if (!window.__chroniclerAudio) {
-            try {
-                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                window.__chroniclerAudio = {
-                    context: audioCtx,
-                    osc1: null,
-                    osc2: null,
-                    gain: null,
-                };
-            } catch(e) {
-                console.error("Web Audio API is not supported in this browser.");
-                runtime.logEvent("[Chronicler] ❌ ERROR: Web Audio API not supported.");
-            }
-        }
-        
-        const audio = window.__chroniclerAudio;
-        if (audio && audio.context) {
-             if (audio.context.state === 'suspended') {
-                try {
-                    await audio.context.resume();
-                    runtime.logEvent("[Chronicler] ✅ Web Audio context for music resumed successfully.");
-                } catch(e) {
-                    runtime.logEvent(\`[Chronicler] ❌ ERROR: Failed to resume audio context: \${e.message}\`);
-                }
-            } else {
-                runtime.logEvent("[Chronicler] ✅ Web Audio context for music is already active.");
-            }
-        } else {
-            runtime.logEvent("[Chronicler] ❌ ERROR: Web Audio context could not be initialized.");
-        }
-
-    } else {
-        window.speechSynthesis.cancel();
-    }
-    setIsChroniclerActive(!isChroniclerActive);
-};
-
 
 const topDossiers = React.useMemo(() => {
     return liveFeed.filter(item => item.type === 'dossier');
@@ -329,7 +271,6 @@ const renderProviderConfig = () => {
     }
 };
 
-
 return (
     <>
     <div className="h-full w-full flex bg-slate-900 text-slate-200 font-sans overflow-hidden">
@@ -364,7 +305,7 @@ return (
                 </div>
 
                 <div className="mt-2 space-y-2">
-                    <button onClick={handleStart} disabled={isSwarmRunning || !taskPrompt.trim()} className="w-full bg-gradient-to-r from-amber-600 to-yellow-600 hover:from-amber-500 text-white font-bold py-3 px-4 rounded-lg disabled:from-slate-700 disabled:text-slate-400 disabled:cursor-not-allowed text-lg">
+                    <button onClick={handleStart} disabled={isSwarmRunning || !taskPrompt.trim()} className="w-full bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 text-white font-bold py-3 px-4 rounded-lg disabled:from-slate-700 disabled:text-slate-400 disabled:cursor-not-allowed text-lg flex items-center justify-center gap-2">
                         {isSwarmRunning ? 'Navigating...' : 'Chart Expedition'}
                     </button>
                 </div>
@@ -385,65 +326,6 @@ return (
                         </p>
                     </div>
                 )}
-            </div>
-
-            <div className="p-4 bg-black/20 rounded-lg border border-slate-800">
-                <h2 className="font-bold text-slate-300 mb-2 flex items-center gap-2">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-purple-400" viewBox="0 0 20 20" fill="currentColor">
-                        <path d="M10 2a6 6 0 00-6 6v3.586l-.707.707A1 1 0 004 14h12a1 1 0 00.707-1.707L16 12.586V8a6 6 0 00-6-6zM10 18a3 3 0 01-3-3h6a3 3 0 01-3 3z" />
-                    </svg>
-                    Ship's Chronicler
-                </h2>
-                <p className="text-sm text-slate-400 mb-3">Activates a narrative AI to comment on the expedition's progress.</p>
-                <button 
-                    onClick={handleToggleChronicler} 
-                    className={\`w-full font-bold py-2 px-4 rounded-lg flex items-center justify-center gap-2 transition-colors \${isChroniclerActive ? 'bg-purple-600 hover:bg-purple-500 text-purple-100' : 'bg-slate-700 hover:bg-slate-600 text-slate-200'}\`}
-                    aria-pressed={isChroniclerActive}
-                >
-                    <div className={\`w-3 h-3 rounded-full \${isChroniclerActive ? 'bg-green-400 animate-pulse' : 'bg-slate-400'}\`}></div>
-                    {isChroniclerActive ? 'Chronicler Active' : 'Activate Chronicler'}
-                </button>
-                <label htmlFor="tts-lang" className="text-sm font-semibold text-slate-300 mt-3 block">Narrator Language:</label>
-                <select 
-                    id="tts-lang" 
-                    value={selectedTtsLang} 
-                    onChange={e => setSelectedTtsLang(e.target.value)} 
-                    className="w-full mt-1 bg-slate-800 border border-slate-600 rounded-lg p-2 text-sm focus:ring-2 focus:ring-purple-500"
-                    disabled={availableTtsLangs.length === 0}
-                >
-                    {availableTtsLangs.length > 0 ? 
-                        availableTtsLangs.map(lang => <option key={lang.code} value={lang.code}>{lang.name}</option>) :
-                        <option>Loading languages...</option>
-                    }
-                </select>
-                <label htmlFor="tts-voice" className="text-sm font-semibold text-slate-300 mt-3 block">Narrator Voice:</label>
-                <select 
-                    id="tts-voice" 
-                    value={selectedTtsVoice} 
-                    onChange={e => setSelectedTtsVoice(e.target.value)} 
-                    className="w-full mt-1 bg-slate-800 border border-slate-600 rounded-lg p-2 text-sm focus:ring-2 focus:ring-purple-500"
-                    disabled={ttsVoices.length === 0}
-                >
-                    {ttsVoices.length > 0 ? 
-                        ttsVoices.map(voice => <option key={voice} value={voice}>{voice}</option>) :
-                        <option>{selectedTtsLang ? 'No voices for this language' : 'Select a language'}</option>
-                    }
-                </select>
-                <label htmlFor="chronicler-freq" className="text-sm font-semibold text-slate-300 mt-3 block">Update Interval:</label>
-                <div className="flex items-center gap-2">
-                    <input 
-                        id="chronicler-freq" 
-                        type="range" 
-                        min="5000" 
-                        max="30000" 
-                        step="1000" 
-                        value={chroniclerFrequency} 
-                        onChange={e => setChroniclerFrequency(Number(e.target.value))} 
-                        className="w-full"
-                        aria-label="Chronicler update interval"
-                    />
-                    <span className="text-sm text-slate-400 w-12 text-right tabular-nums">{(chroniclerFrequency / 1000).toFixed(1)}s</span>
-                </div>
             </div>
             
             <div className="p-4 bg-black/20 rounded-lg border border-slate-800">
@@ -530,7 +412,6 @@ return (
         </div>
     )}
     
-    {isChroniclerActive && <ChroniclerView eventLog={eventLog} runtime={runtime} selectedTtsVoice={selectedTtsVoice} selectedTtsLang={selectedTtsLang} isChroniclerActive={isChroniclerActive} isSwarmRunning={isSwarmRunning} chroniclerFrequency={chroniclerFrequency} taskPrompt={taskPrompt} narrativeLog={narrativeLog} setNarrativeLog={setNarrativeLog} />}
     </>
 );
 `

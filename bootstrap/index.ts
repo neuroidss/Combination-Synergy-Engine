@@ -39,21 +39,6 @@ const SYNERGY_FORGE_TOOLS: ToolCreatorPayload[] = [{
         { name: 'ollamaModels', type: 'array', description: 'Array of dynamically fetched Ollama models.', required: true },
         { name: 'ollamaState', type: 'object', description: 'State of the Ollama model fetching process.', required: true },
         { name: 'fetchOllamaModels', type: 'object', description: 'Function to fetch models from Ollama.', required: true },
-        // Chronicler props
-        { name: 'isChroniclerActive', type: 'boolean', description: 'Whether the narrative agent is active.', required: true },
-        { name: 'setIsChroniclerActive', type: 'object', description: 'Function to toggle the Chronicler.', required: true },
-        { name: 'availableTtsLangs', type: 'array', description: 'List of available TTS languages.', required: true },
-        { name: 'selectedTtsLang', type: 'string', description: 'The currently selected language code.', required: true },
-        { name: 'setSelectedTtsLang', type: 'object', description: 'Function to set the TTS language.', required: true },
-        { name: 'ttsVoices', type: 'array', description: 'List of available TTS voices for the selected language.', required: true },
-        { name: 'selectedTtsVoice', type: 'string', description: 'The currently selected voice.', required: true },
-        { name: 'setSelectedTtsVoice', type: 'object', description: 'Function to set the TTS voice.', required: true },
-        // New Chronicler frequency props
-        { name: 'chroniclerFrequency', type: 'number', description: 'The update frequency for the Chronicler agent in ms.', required: true },
-        { name: 'setChroniclerFrequency', type: 'object', description: 'Function to set the Chronicler frequency.', required: true },
-        // New Chronicler state props
-        { name: 'narrativeLog', type: 'array', description: 'The array of narrative log entries.', required: true },
-        { name: 'setNarrativeLog', type: 'object', description: 'Function to update the narrative log.', required: true },
     ],
     implementationCode: SYNERGY_FORGE_UI_CODE,
 }];

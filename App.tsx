@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState } from 'react';
 import { useAppRuntime } from './hooks/useAppRuntime';
 import UIToolRunner from './components/UIToolRunner';
@@ -10,69 +9,8 @@ const App: React.FC = () => {
     const { getTool, eventLog, apiCallCount, agentSwarm, isServerConnected, runtimeApi } = appRuntime;
     const [proxyBootstrapped, setProxyBootstrapped] = useState(false);
 
-    // Chronicler and TTS State
-    const [isChroniclerActive, setIsChroniclerActive] = useState(false);
-    const [availableTtsLangs, setAvailableTtsLangs] = useState<{ code: string; name: string }[]>([]);
-    const [selectedTtsLang, setSelectedTtsLang] = useState('en-US');
-    const [ttsVoices, setTtsVoices] = useState<string[]>([]);
-    const [selectedTtsVoice, setSelectedTtsVoice] = useState('');
-    const [chroniclerFrequency, setChroniclerFrequency] = useState(15000); // Default 15s
-    const [narrativeLog, setNarrativeLog] = useState<{ original: string; translated: string | null }[]>([]);
-
-
     const mainUiTool = getTool('Synergy Forge Main UI') as LLMTool | undefined;
     const debugLogTool = getTool('Debug Log View') as LLMTool | undefined;
-
-    // Effect to load and manage TTS voices and languages
-    useEffect(() => {
-        const populateVoiceData = () => {
-            const allVoices = window.speechSynthesis.getVoices();
-            if (allVoices.length === 0) return;
-
-            // 1. Populate unique languages
-            const langCodes = [...new Set(allVoices.map(v => v.lang))];
-            let langNameTool;
-            try {
-                langNameTool = new Intl.DisplayNames(['en'], { type: 'language' });
-            } catch (e) {
-                langNameTool = { of: (code: string) => code }; // Fallback
-            }
-            
-            const langOptions = langCodes.map(code => {
-                const baseLang = code.split('-')[0];
-                const name = langNameTool.of(baseLang) || baseLang;
-                return { code, name: `${name} (${code})` };
-            }).sort((a, b) => a.name.localeCompare(b.name));
-            
-            setAvailableTtsLangs(langOptions);
-
-            // 2. Filter voices for the currently selected language
-            const voicesForLang = allVoices
-                .filter(v => v.lang === selectedTtsLang)
-                .map(v => v.name)
-                .filter((v, i, a) => a.indexOf(v) === i);
-            
-            setTtsVoices(voicesForLang);
-
-            // 3. Set a default voice if the current one is not valid for this language
-            if (voicesForLang.length > 0 && !voicesForLang.includes(selectedTtsVoice)) {
-                const preferredVoice = voicesForLang.find(v => v.includes('Google') || v.includes('Zephyr')) || voicesForLang[0];
-                setSelectedTtsVoice(preferredVoice);
-            } else if (voicesForLang.length === 0 && selectedTtsVoice) {
-                setSelectedTtsVoice('');
-            }
-        };
-
-        populateVoiceData();
-        if (speechSynthesis.onvoiceschanged !== undefined) {
-            speechSynthesis.onvoiceschanged = populateVoiceData;
-        }
-
-        return () => {
-          speechSynthesis.onvoiceschanged = null;
-        };
-    }, [selectedTtsLang, selectedTtsVoice]);
-
 
     useEffect(() => {
         const bootstrapAndTestProxy = async () => {
@@ -129,19 +67,6 @@ const App: React.FC = () => {
                         ollamaModels: appRuntime.ollamaModels,
                         ollamaState: appRuntime.ollamaState,
                         fetchOllamaModels: appRuntime.fetchOllamaModels,
-                        // Chronicler & TTS props
-                        isChroniclerActive: isChroniclerActive,
-                        setIsChroniclerActive: setIsChroniclerActive,
-                        availableTtsLangs: availableTtsLangs,
-                        selectedTtsLang: selectedTtsLang,
-                        setSelectedTtsLang: setSelectedTtsLang,
-                        ttsVoices: ttsVoices,
-                        selectedTtsVoice: selectedTtsVoice,
-                        setSelectedTtsVoice: setSelectedTtsVoice,
-                        chroniclerFrequency: chroniclerFrequency,
-                        setChroniclerFrequency: setChroniclerFrequency,
-                        narrativeLog: narrativeLog,
-                        setNarrativeLog: setNarrativeLog,
                     }} 
                 />
             ) : (
@@ -158,7 +83,7 @@ const App: React.FC = () => {
                         onReset: handleReset,
                         apiCallCounts: apiCallCount,
                         apiCallLimit: 999,
-                        agentCount: agentSwarm.length + (isChroniclerActive ? 1 : 0),
+                        agentCount: agentSwarm.length,
                     }}
                 />
             )}

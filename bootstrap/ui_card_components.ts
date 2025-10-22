@@ -17,7 +17,7 @@ export const UI_CARD_COMPONENTS_CODE = `
     const TextWithCitations = React.memo(({ text, sources }) => {
         if (!text) return null;
 
-// FIX: Correctly escape backslashes for special characters like '[' and ']' in regex literals inside a template string.
+        // FIX: Correctly escape backslashes for special characters like '[' and ']' in regex literals inside a template string.
         const parts = text.split(/(\\[\\s*\\d+(?:,\\s*\\d+)*(?:-\\d+)?\\s*\\])/g);
         
         return (
@@ -28,7 +28,7 @@ export const UI_CARD_COMPONENTS_CODE = `
                     }
 
                     // Citation part
-// FIX: Correctly escape backslashes for special characters like '[' and ']' in regex literals inside a template string.
+                    // FIX: Correctly escape backslashes for special characters like '[' and ']' in regex literals inside a template string.
                     const numbersStr = part.replace(/[\\[\\]\\s]/g, '');
                     const citationNumbers = new Set();
                     numbersStr.split(',').forEach(numStr => {
@@ -549,4 +549,4 @@ export const UI_CARD_COMPONENTS_CODE = `
                 return null;
         }
     };
-`;
+`
