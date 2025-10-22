@@ -4,6 +4,13 @@ import type { APIConfig, LLMTool, AIResponse, AIToolCall } from "../types";
 
 const OPENAI_TIMEOUT = 600000; // 10 минут
 
+// Helper function to strip <think> blocks from model output
+const stripThinking = (text: string | null | undefined): string => {
+    if (!text) return "";
+    // This regex removes any <think>...</think> blocks and trims whitespace.
+    return text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+};
+
 const fetchWithTimeout = async (url: string, options: RequestInit, timeout: number): Promise<Response> => {
     const controller = new AbortController();
     const id = setTimeout(() => controller.abort(), timeout);
@@ -124,7 +131,8 @@ export const generateWithTools = async (
     modelId: string,
     apiConfig: APIConfig,
     tools: LLMTool[],
-    files: { type: string, data: string }[] = []
+    files: { type: string, data: string }[] = [],
+    emulateToolCalling: boolean = false
 ): Promise<AIResponse> => {
     const { openAIAPIKey, openAIBaseUrl } = apiConfig;
 
@@ -138,8 +146,21 @@ export const generateWithTools = async (
         toolNameMap.set(tool.name, tool.name);
     });
 
-    const userMessageContent: any[] = [{ type: 'text', text: userInput }];
+    const fallbackInstruction = `\n\nWhen you need to use a tool, you can use the provided 'tools' array. If the tool functionality is unavailable or you are not configured for it, you MUST respond with ONLY a JSON object (or an array of objects) in the following format, inside a \`\`\`json block.
+[
+  {
+    "name": "tool_name_to_call",
+    "arguments": { "arg1": "value1", "arg2": "value2" }
+  }
+]`;
+
+    // Combine system and user prompts for better compatibility with models that don't support a 'system' role.
+    const combinedUserPrompt = `${systemInstruction}${fallbackInstruction}\n\n---\n\n${userInput}`;
+
+    let userMessageContent: any;
     if (files && files.length > 0) {
+        // Use array format for multimodal requests
+        userMessageContent = [{ type: 'text', text: combinedUserPrompt }];
         files.forEach(file => {
             userMessageContent.push({
                 type: 'image_url',
@@ -148,26 +169,21 @@ export const generateWithTools = async (
                 }
             });
         });
+    } else {
+        // Use string format for text-only requests
+        userMessageContent = combinedUserPrompt;
     }
-
-    const fallbackInstruction = `\n\nWhen you need to use a tool, you can use the provided 'tools' array. If the tool functionality is unavailable or you are not configured for it, you MUST respond with ONLY a JSON object (or an array of objects) in the following format, inside a \`\`\`json block:
-[
-  {
-    "name": "tool_name_to_call",
-    "arguments": { "arg1": "value1", "arg2": "value2" }
-  }
-]`;
 
     const body = {
         model: modelId,
         messages: [
-            { role: 'system', content: systemInstruction + fallbackInstruction },
             { role: 'user', content: userMessageContent }
         ],
         temperature: 0.1,
         max_tokens: 4096,
-        tools: openAITools.length > 0 ? openAITools : undefined,
-        tool_choice: openAITools.length > 0 ? "auto" : undefined,
+        top_p: 0.95,
+        tools: !emulateToolCalling && openAITools.length > 0 ? openAITools : undefined,
+        tool_choice: !emulateToolCalling && openAITools.length > 0 ? "auto" : undefined,
     };
     
     try {
@@ -188,7 +204,7 @@ export const generateWithTools = async (
 
         const data = await response.json();
         const toolCallsData = data.choices?.[0]?.message?.tool_calls;
-        const responseContent = data.choices?.[0]?.message?.content;
+        const responseContent = stripThinking(data.choices?.[0]?.message?.content);
         
         if (toolCallsData && Array.isArray(toolCallsData) && toolCallsData.length > 0) {
             try {
@@ -253,8 +269,13 @@ export const generateText = async (
     if (!openAIAPIKey) throw new Error("OpenAI API Key is missing.");
     if (!openAIBaseUrl) throw new Error("OpenAI Base URL is missing.");
     
-    const userMessageContent: any[] = [{ type: 'text', text: userInput }];
+    // Combine system and user prompts for better compatibility with models that don't support a 'system' role.
+    const combinedUserPrompt = `${systemInstruction}\n\n---\n\n${userInput}`;
+
+    let userMessageContent: any;
     if (files && files.length > 0) {
+        // Use array format for multimodal requests
+        userMessageContent = [{ type: 'text', text: combinedUserPrompt }];
         files.forEach(file => {
             userMessageContent.push({
                 type: 'image_url',
@@ -263,12 +284,14 @@ export const generateText = async (
                 }
             });
         });
+    } else {
+        // Use string format for text-only requests
+        userMessageContent = combinedUserPrompt;
     }
 
     const body = {
         model: modelId,
         messages: [
-            { role: 'system', content: systemInstruction },
             { role: 'user', content: userMessageContent }
         ],
         temperature: 0.0,
@@ -281,7 +304,7 @@ export const generateText = async (
             {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${openAIAPIKey}` },
-                body: JSON.stringify(body)
+                body: JSON.stringify(body),
             },
             OPENAI_TIMEOUT
         );
@@ -292,7 +315,7 @@ export const generateText = async (
         }
 
         const data = await response.json();
-        return data.choices?.[0]?.message?.content || "";
+        return stripThinking(data.choices?.[0]?.message?.content);
     } catch (e) {
         if (e instanceof Error && e.message.toLowerCase().includes('failed to fetch')) {
              throw new Error(`Network Error: Could not connect to OpenAI-compatible API at ${openAIBaseUrl}. \n\nCommon causes:\n1. The server is not running.\n2. The Base URL is incorrect.\n3. A browser security feature (CORS) is blocking the request. If you are running a local server (like Ollama), ensure it's configured to accept requests from this web app's origin.`);

@@ -1,5 +1,3 @@
-
-
 // VIBE_NOTE: Do not escape backticks or dollar signs in template literals in this file.
 // Escaping is only for 'implementationCode' strings in tool definitions.
 import type { SearchDataSource, SearchResult } from '../types';
@@ -220,46 +218,54 @@ export const searchWeb = async (query: string, logEvent: (message: string) => vo
     const results: SearchResult[] = [];
     try {
         const response = await fetchWithCorsFallback(url, logEvent, proxyUrl);
-        const htmlContent = await response.text();
-        
+        const html = await response.text();
+
         const parser = new DOMParser();
-        const doc = parser.parseFromString(htmlContent, 'text/html');
-        const resultElements = doc.querySelectorAll('.web-result');
-        
-        resultElements.forEach(el => {
-            const titleLink = el.querySelector<HTMLAnchorElement>('a.result__a');
-            const snippetEl = el.querySelector('.result__snippet');
+        const doc = parser.parseFromString(html, 'text/html');
+        const resultElements = doc.querySelectorAll('.result');
 
-            if (titleLink && snippetEl) {
-                const hrefAttr = titleLink.getAttribute('href');
-                if (hrefAttr) {
-                    const redirectUrl = new URL(hrefAttr, 'https://duckduckgo.com');
-                    const actualLink = redirectUrl.searchParams.get('uddg');
+        for (const element of Array.from(resultElements).slice(0, limit)) {
+            const titleEl = element.querySelector<HTMLAnchorElement>('.result__a');
+            const snippetEl = element.querySelector('.result__snippet');
+            
+            const linkHref = titleEl?.href;
+            const title = titleEl?.textContent?.trim();
+            const snippet = snippetEl?.textContent?.trim();
 
-                    if (actualLink) {
-                        const canonicalLink = buildCanonicalUrl(actualLink);
-                        if (canonicalLink) { // Only add if the link is valid
-                            results.push({
-                                link: canonicalLink,
-                                title: (titleLink.textContent || '').trim(),
-                                snippet: (snippetEl.textContent || '').trim(),
-                                source: 'WebSearch' as SearchDataSource.WebSearch
-                            });
-                        } else {
-                             logEvent(`[Search.Web] WARN: Discarded invalid or unparseable link from search results: ${actualLink}`);
-                        }
-                    }
+            if (linkHref && title && snippet) {
+                 // DDG links are redirectors. We need to extract the real URL from the 'uddg' query param.
+                 let realLink = linkHref;
+                 try {
+                     const linkUrl = new URL(linkHref, 'https://duckduckgo.com');
+                     if (linkUrl.searchParams.has('uddg')) {
+                         realLink = linkUrl.searchParams.get('uddg')!;
+                     }
+                 } catch (e) {
+                    logEvent(`[Search.Web] WARN: Could not parse DDG redirect URL: ${linkHref}`);
+                 }
+
+                const canonicalLink = buildCanonicalUrl(realLink);
+                if (canonicalLink) {
+                    results.push({
+                        link: canonicalLink,
+                        title: title,
+                        snippet: snippet,
+                        source: 'WebSearch' as SearchDataSource.WebSearch
+                    });
                 }
             }
-        });
-        logEvent(`[Search.Web] Success via DuckDuckGo, found ${results.length} results.`);
+        }
+        if (results.length > 0) {
+            logEvent(`[Search.Web] Success via DDG HTML scraping, found ${results.length} results.`);
+        } else {
+             logEvent(`[Search.Web] WARN: DDG HTML scraping returned no parsable results.`);
+        }
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        logEvent(`[Search.Web] Error: ${message}`);
-        // Re-throw to allow the caller (e.g., Federated Search) to know about the failure.
+        logEvent(`[Search.Web] Error scraping DDG HTML: ${message}`);
         throw error;
     }
-    return results.slice(0, limit);
+    return results;
 };
 
 export const searchPubMed = async (query: string, logEvent: (message: string) => void, limit: number, sinceYear?: number, proxyUrl?: string): Promise<SearchResult[]> => {
@@ -557,24 +563,35 @@ export const enrichSource = async (source: SearchResult, logEvent: (message: str
     if (isPubmedUrl && pubmedIdMatch && pubmedIdMatch[1]) {
         const pubmedId = pubmedIdMatch[1];
         
-        // --- Official ID Converter API (Preferred method) ---
         logEvent(`[Enricher] PubMed link detected. Attempting official conversion for PMID: ${pubmedId}`);
         try {
             const converterUrl = `https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/?ids=${pubmedId}&format=json`;
             const converterResponse = await fetchWithCorsFallback(converterUrl, logEvent, proxyUrl);
             if (converterResponse.ok) {
-                const converterData = await converterResponse.json();
-                const record = converterData?.records?.[0];
-                if (record && record.pmcid) {
-                    const officialPmcUrl = buildCanonicalUrl(record.pmcid);
-                    if (officialPmcUrl) {
-                        logEvent(`[Enricher] Found official PMCID ${record.pmcid}. Prioritizing official PMC URL.`);
-                        // Ensure no duplicates and put the official one first.
-                        const urlSet = new Set([officialPmcUrl, ...urlsToTry]);
-                        urlsToTry.splice(0, urlsToTry.length, ...Array.from(urlSet));
+                // Robust parsing
+                const responseText = await converterResponse.text();
+                try {
+                    const converterData = JSON.parse(responseText);
+                    const record = converterData?.records?.[0];
+                    if (record && record.pmcid) {
+                        const officialPmcUrl = buildCanonicalUrl(record.pmcid);
+                        if (officialPmcUrl) {
+                            logEvent(`[Enricher] Found official PMCID ${record.pmcid}. Prioritizing official PMC URL.`);
+                             if (!urlsToTry.includes(officialPmcUrl)) {
+                                urlsToTry.unshift(officialPmcUrl); // Add to the front of the queue
+                            }
+                        }
+                    } else {
+                        logEvent(`[Enricher] No PMCID found via API for PMID ${pubmedId}. This might mean the ID is invalid OR it's a PMCID. Adding a fallback PMC URL to the queue.`);
+                        // The original PMID might have been a misidentified PMCID.
+                        const fallbackPmcUrl = buildCanonicalUrl(`PMC${pubmedId}`);
+                        if (fallbackPmcUrl && !urlsToTry.includes(fallbackPmcUrl)) {
+                            // Add it after the original URL, but before any other fallbacks.
+                            urlsToTry.splice(1, 0, fallbackPmcUrl);
+                        }
                     }
-                } else {
-                    logEvent(`[Enricher] No PMCID found via API for PMID ${pubmedId}. Will proceed with original PubMed URL.`);
+                } catch (jsonError) {
+                    logEvent(`[Enricher] WARN: ID Converter API response was not valid JSON for PMID ${pubmedId}. Response snippet: ${responseText.substring(0,200)}...`);
                 }
             } else {
                 logEvent(`[Enricher] WARN: ID Converter API failed with status ${converterResponse.status}. Will proceed with original PubMed URL.`);
@@ -598,7 +615,26 @@ export const enrichSource = async (source: SearchResult, logEvent: (message: str
         attemptedUrls.add(url);
         try {
             logEvent(`[Enricher] Attempting to scrape: ${url}`);
-            response = await fetchWithCorsFallback(url, logEvent, proxyUrl);
+            const tempResponse = await fetchWithCorsFallback(url, logEvent, proxyUrl);
+
+            // Read the body once to check for application-level error pages that return 200 OK
+            const responseText = await tempResponse.text();
+            if (
+                responseText.includes(" is not available") ||
+                responseText.includes("page does not exist") ||
+                (url.includes('ncbi.nlm.nih.gov') && (responseText.includes("The following PMID is not available") || responseText.includes("citation details not found")))
+            ) {
+                 logEvent(`[Enricher] Detected 'not available' page for ${url}. Treating as fetch failure.`);
+                 throw new Error("Content is not available on this page.");
+            }
+
+            // If we're here, the response body is valid. Re-create a Response object since the body has been consumed.
+            response = new Response(responseText, {
+                status: tempResponse.status,
+                statusText: tempResponse.statusText,
+                headers: tempResponse.headers
+            });
+            
             successfulUrl = url;
             break; // Success!
         } catch (error) {

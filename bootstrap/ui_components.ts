@@ -1,6 +1,11 @@
+import { CHRONICLER_UI_CODE } from './ui_chronicler';
+import { MAIN_PANEL_CODE } from './ui_main_panel';
 
-export const UI_COMPONENTS_CODE = `
-// This code has been moved into bootstrap/index.ts and wrapped in a React.useMemo
-// to prevent the components from being re-defined on every render, which was causing
-// the flickering/re-mounting issue.
+export const SYNERGY_FORGE_UI_CODE = `
+// The Chronicler agent's logic and UI component are defined first,
+// so they are in scope for the Main UI component that uses them.
+${CHRONICLER_UI_CODE}
+
+// The main UI panel, which renders the Chronicler component, follows.
+${MAIN_PANEL_CODE}
 `;

@@ -1,3 +1,7 @@
+
+
+
+
 import type { ToolCreatorPayload } from '../types';
 
 export const DATA_RECORDER_TOOLS: ToolCreatorPayload[] = [
@@ -198,35 +202,47 @@ export const DATA_RECORDER_TOOLS: ToolCreatorPayload[] = [
     },
     {
         name: 'RecordTrialDossier',
-        description: 'Records a complete, trial-ready dossier for a specific combination, intended for business and investment review.',
+        description: 'Records a complete Risk Engineering Dossier for a specific combination, intended for business and investment review. Supports versioning.',
         category: 'Functional',
         executionEnvironment: 'Client',
-        purpose: 'To capture the structured output of the "Business Analyst" agent, turning research findings into an actionable investment proposal.',
+        purpose: 'To capture the structured output of the Risk Engineering agent, turning a raw hypothesis into an actionable, de-risked R&D project.',
         parameters: [
-            { name: 'combination', type: 'array', description: 'The array of intervention objects, each with "name" and "type".', required: true },
-            { name: 'executiveSummary', type: 'string', description: 'A high-level summary for investors.', required: true },
-            { name: 'scientificRationale', type: 'string', description: 'Detailed explanation of the biological mechanism and synergy.', required: true },
-            { name: 'inSilicoValidation', type: 'string', description: 'The results from the SynergyForge simulation, presented as evidence. E.g., "Predicted healthspan increase of 45% (p<0.001, n=1000) across 3 of 4 aging models."', required: true },
-            { name: 'marketAndIP', type: 'string', description: 'Analysis of the market opportunity and potential for intellectual property.', required: true },
-            { name: 'roadmap', type: 'string', description: 'Proposed next steps, e.g., preclinical animal studies.', required: true },
-            { name: 'riskAnalysis', type: 'object', description: 'A structured object containing risk scores and a summary. Example: {"scientificRisk": 30, "commercialRisk": 50, "safetyRisk": 60, "overallRiskScore": 45, "riskSummary": "Primary risk is off-target effects..."}', required: true },
-            { name: 'mitigationPlan', type: 'string', description: 'A concrete plan of action to de-risk the proposal (e.g., "Conduct advanced toxicology screens and a 12-month mouse study.").', required: true },
-            { name: 'estimatedCostUSD', type: 'number', description: 'The estimated cost in USD to execute the mitigation plan.', required: true },
-            { name: 'molecularMechanism', type: 'string', description: 'A detailed molecular-level explanation of the synergy, as if from a "Virtual Cell" simulation.', required: false }
+            { name: 'synergyData', type: 'object', description: 'The original synergy object, containing combination, summary, scores, etc.', required: true },
+            { name: 'noveltyClass', type: 'string', description: 'The classification of the synergy\'s novelty (e.g., "DE NOVO HYPOTHESIS").', required: true },
+            { name: 'riskDossier', type: 'array', description: 'The detailed array of identified risks and their engineering mitigation plans.', required: true },
+            { name: 'commercializationOutlook', type: 'object', description: 'A structured object containing the full commercial analysis, including target indication, market data, and IP strategy.', required: false },
+            { name: 'version', type: 'number', description: 'The version number for this dossier (e.g., 1, 2, 3).', required: false },
+            { name: 'history', type: 'array', description: 'An array of strings describing the changelog for this dossier.', required: false },
+            { name: 'backgroundSources', type: 'array', description: 'The list of sources used for analysis.', required: false },
         ],
         implementationCode: `
-            const { ...dossierData } = args;
-            const { combination } = dossierData;
+            const { synergyData, noveltyClass, riskDossier, commercializationOutlook, version, history, backgroundSources } = args;
+            const { combination } = synergyData;
             
             if (!Array.isArray(combination) || combination.length === 0 || combination.some(c => typeof c !== 'object' || !c.name || !c.type)) {
-                throw new Error("A dossier 'combination' is required and must be an array of objects, each with a 'name' and a 'type'.");
+                throw new Error("A valid 'synergyData.combination' is required.");
+            }
+             if (!noveltyClass || !riskDossier) {
+                throw new Error("Missing required fields: 'noveltyClass' and 'riskDossier'.");
             }
             
-            runtime.logEvent(\`[Dossier] Recording investment proposal for: \${combination.map(c => c.name).join(' + ')}\`);
+            runtime.logEvent(\`[Dossier] Recording Risk Engineering Dossier v\${version || 1} for: \${combination.map(c => c.name).join(' + ')}\`);
+
+            const fullDossier = {
+                combination: synergyData.combination,
+                synergyData,
+                noveltyClass,
+                riskDossier,
+                ...(commercializationOutlook || {}),
+                version: version || 1,
+                history: history || [],
+                backgroundSources: backgroundSources || [],
+                updatedAt: new Date().toISOString(),
+            };
 
             return {
                 success: true,
-                dossier: dossierData,
+                dossier: fullDossier,
             };
         `
     },

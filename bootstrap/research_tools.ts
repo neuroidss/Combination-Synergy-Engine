@@ -1,4 +1,5 @@
 
+
 import type { ToolCreatorPayload } from '../types';
 
 export const RESEARCH_TOOLS: ToolCreatorPayload[] = [
@@ -46,7 +47,12 @@ export const RESEARCH_TOOLS: ToolCreatorPayload[] = [
                 // 3. Score each result
                 const scoredResults = searchResults.map((result, index) => {
                     // Base score from semantic similarity
-                    const similarityScore = cosineSimilarity(objectiveEmbedding, resultEmbeddings[index]);
+                    let similarityScore = cosineSimilarity(objectiveEmbedding, resultEmbeddings[index]);
+                    
+                    // FIX: Prevent NaN scores from breaking the sort
+                    if (isNaN(similarityScore)) {
+                        similarityScore = 0;
+                    }
 
                     // Heuristic bonus for important keywords
                     let heuristicBonus = 0;
@@ -399,10 +405,21 @@ You MUST respond with ONLY a single, valid JSON object. Do not add any text, exp
             if (!enrichedSource || !enrichedSource.snippet || enrichedSource.snippet.startsWith('Fetch failed')) {
                 throw new Error('Failed to fetch or enrich content for the source.');
             }
+            
+            // --- NEW: Pre-validation Step ---
+            // Check if the snippet is garbage (e.g., a "coming soon" message) before calling the AI.
+            const snippetText = enrichedSource.snippet.toLowerCase();
+            if (snippetText.length < 150 && (snippetText.includes('will be available') || snippetText.includes('not found') || snippetText.includes('no abstract'))) {
+                throw new Error(\`Skipping source due to low-quality snippet: "\${enrichedSource.snippet.substring(0,100)}..."\`);
+            }
 
             // Step 2: Validate the enriched content using an AI model
-            runtime.logEvent(\`[Validator] Validating: \${enrichedSource.title.substring(0, 50)}...\`);
-            const validationContext = \`<PRIMARY_SOURCE>\\n<TITLE>\${enrichedSource.title}</TITLE>\\n<URL>\${enrichedSource.link}</URL>\\n<SNIPPET>\\n\${enrichedSource.snippet}\\n</SNIPPET>\\n</PRIMARY_SOURCE>\`;
+            runtime.logEvent(\`[Validator] Validating: \${(enrichedSource.title || '').substring(0, 50)}...\`);
+            
+            const truncatedTitle = (enrichedSource.title || '').substring(0, 300);
+            const truncatedSnippet = (enrichedSource.snippet || '').substring(0, 4000);
+
+            const validationContext = \`<PRIMARY_SOURCE>\\n<TITLE>\${truncatedTitle}</TITLE>\\n<URL>\${enrichedSource.link}</URL>\\n<SNIPPET>\\n\${truncatedSnippet}\\n</SNIPPET>\\n</PRIMARY_SOURCE>\`;
             
             const systemInstruction = \`You are an automated data extraction service. Your SOLE function is to analyze the provided scientific source and call the 'RecordValidatedSource' tool.
 - You must provide a concise summary, a reliability score (0.0-1.0), and a justification for the score.
@@ -425,6 +442,14 @@ You MUST respond with ONLY a single, valid JSON object. Do not add any text, exp
             
             // Step 3: Record the validated source
             const toolCall = aiResponse.toolCalls[0];
+
+            // FIX: AI models can sometimes omit the 'title' field in the tool call.
+            // If it's missing, we re-insert it from our context to prevent crashes.
+            if (toolCall.arguments && !toolCall.arguments.title && enrichedSource.title) {
+                runtime.logEvent('[Validator] ⚠️ AI omitted title from tool call. Re-inserting it from context.');
+                toolCall.arguments.title = enrichedSource.title;
+            }
+
             const executionResult = await runtime.tools.run(toolCall.name, toolCall.arguments);
             if (!executionResult || !executionResult.validatedSource) {
                 throw new Error("Recording the validated source failed.");
@@ -436,7 +461,9 @@ You MUST respond with ONLY a single, valid JSON object. Do not add any text, exp
                 textContent: enrichedSource.textContent, // Carry over the full text
             };
 
-            runtime.logEvent(\`[Validator] ✅ Validated: \${finalValidatedSource.title.substring(0, 50)}...\`);
+            // FIX: Add a defensive check here to prevent crash even if title is somehow still missing.
+            const titleForLog = finalValidatedSource.title || 'Untitled Source';
+            runtime.logEvent(\`[Validator] ✅ Validated: \${titleForLog.substring(0, 50)}...\`);
             
             return { success: true, validatedSource: finalValidatedSource };
         `

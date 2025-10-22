@@ -66,6 +66,7 @@ export type MainView = 'SYNERGY_FORGE';
 export enum ModelProvider {
   GoogleAI = 'GoogleAI',
   OpenAI_API = 'OpenAI_API',
+  DeepSeek = 'DeepSeek',
   Ollama = 'Ollama',
   HuggingFace = 'HuggingFace',
   Wllama = 'Wllama',

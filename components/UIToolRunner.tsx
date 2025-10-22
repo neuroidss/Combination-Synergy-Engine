@@ -1,6 +1,11 @@
 // VIBE_NOTE: Do not escape backticks or dollar signs in template literals in this file.
 // Escaping is only for 'implementationCode' strings in tool definitions.
-import React, { useMemo } from 'react';
+// FIX: Reverted from namespace import to default import for consistency and to resolve component type issues.
+// The previous namespace import (`import * as React`) was an attempted fix for type resolution issues
+// in ErrorBoundary, but the errors persisted. Using a standard default import aligns with other files
+// and should allow TypeScript to correctly recognize React.Component inheritance.
+// FIX: Import Component directly to resolve type inheritance issues for ErrorBoundary.
+import React, { Component } from 'react';
 import type { LLMTool, UIToolRunnerProps } from '../types';
 import DebugLogView from './ui_tools/DebugLogView';
 import * as Icons from './icons';
@@ -24,12 +29,17 @@ type ErrorBoundaryState = {
   hasError: boolean;
 };
 
-// FIX: The ErrorBoundary class now extends React.Component to be a valid React component. This gives it access to state, props, and lifecycle methods, resolving the errors.
+// FIX: Switched to a class property for state initialization and removed the constructor.
+// This is a more modern and robust approach that avoids potential issues with `this`
+// in the constructor. It explicitly adds the `state` property to the class type,
+// which should resolve the reported TypeScript errors about `state`, `props`, and `setState`
+// not existing on the component instance, which likely stem from a type resolution issue
+// with the component's inheritance.
+// FIX: Reverted to using `React.Component` instead of `Component`. While `Component` is imported,
+// using the fully qualified `React.Component` can resolve module resolution issues that cause
+// TypeScript to fail to recognize the component's inheritance and its properties like `props` and `setState`.
 class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  constructor(props: ErrorBoundaryProps) {
-    super(props);
-    this.state = { hasError: false };
-  }
+  state: ErrorBoundaryState = { hasError: false };
 
   static getDerivedStateFromError(error: any): ErrorBoundaryState {
     console.error("UI Tool Runner caught an error:", error);
@@ -57,7 +67,7 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
 const UIToolRunner: React.FC<UIToolRunnerComponentProps> = ({ tool, props }) => {
   // Memoize the compiled component to prevent re-compiling and re-mounting on every render,
   // which was causing the flickering and state loss in complex components like the interactive graph.
-  const CompiledComponent = useMemo(() => {
+  const CompiledComponent = React.useMemo(() => {
     if (tool.category !== 'UI Component') {
       return () => <div>Error: Tool "{tool.name}" is not a UI Component.</div>;
     }

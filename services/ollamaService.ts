@@ -4,6 +4,13 @@ import type { APIConfig, LLMTool, AIResponse, AIToolCall } from "../types";
 
 const OLLAMA_TIMEOUT = 600000; // 10 minutes
 
+// Helper function to strip <think> blocks from model output
+const stripThinking = (text: string | null | undefined): string => {
+    if (!text) return "";
+    // This regex removes any <think>...</think> blocks and trims whitespace.
+    return text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+};
+
 const fetchWithTimeout = async (url: string, options: RequestInit, timeout: number): Promise<Response> => {
     const controller = new AbortController();
     const id = setTimeout(() => controller.abort(), timeout);
@@ -180,7 +187,7 @@ export const generateWithTools = async (
 
         const data = await response.json();
         const toolCallsData = data.message?.tool_calls;
-        const responseContent = data.message?.content;
+        const responseContent = stripThinking(data.message?.content);
         
         if (toolCallsData && Array.isArray(toolCallsData) && toolCallsData.length > 0) {
             const toolCalls: AIToolCall[] = toolCallsData.map(tc => {
@@ -273,7 +280,7 @@ export const generateText = async (
         }
 
         const data = await response.json();
-        return data.message?.content || "";
+        return stripThinking(data.message?.content);
     } catch (e) {
         throw generateDetailedError(e, ollamaHost);
     }

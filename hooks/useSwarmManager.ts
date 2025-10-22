@@ -57,19 +57,16 @@ const resultToString = (result: any): string => {
             if (sanitizedResult && Array.isArray(sanitizedResult.searchResults)) {
                 return JSON.stringify({
                     success: sanitizedResult.success,
-                    // FIX: Un-escape template literal
                     message: `Found ${sanitizedResult.searchResults.length} articles. The full list is available to be passed to the next tool, but was omitted from history for brevity.`,
                 });
             }
             // Generic summary for other large tool outputs.
-            // FIX: Un-escape template literal
             return `Tool executed successfully, but its output is too large to display in this context.`;
         }
         
         return str;
 
     } catch (e) {
-        // FIX: Un-escape template literal
         return `[Error: Could not serialize the tool's result for display in history.]`;
     }
 };
@@ -121,9 +118,7 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
             setIsSwarmRunning(false);
             setScriptExecutionState(prev => (prev === 'running' || prev === 'paused') ? 'idle' : prev);
             setActiveToolsForTask([]);
-            // FIX: Un-escape template literal
             const reasonText = reason ? `: ${reason}` : ' by user.';
-            // FIX: Un-escape template literal
             logEvent(`[INFO] 🛑 Task ${isPause ? 'paused' : 'stopped'}${reasonText}`);
             if (!isPause && swarmHistoryRef.current.length > 0) {
                 setLastSwarmRunHistory([...swarmHistoryRef.current]);
@@ -155,7 +150,6 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
     const stepBackward = useCallback(() => {
          if (scriptExecutionState === 'paused' && currentScriptStepIndex > 0) {
             setCurrentScriptStepIndex(prev => prev - 1);
-            // FIX: Un-escape template literal
             logEvent(`[SCRIPT] Stepped back to step ${currentScriptStepIndex}.`);
         }
     }, [scriptExecutionState, currentScriptStepIndex, logEvent]);
@@ -164,7 +158,6 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
         setCurrentScriptStepIndex(index);
         setStepStatuses(prev => prev.map((s, i) => i >= index ? { status: 'pending' } : s));
         setScriptExecutionState('running');
-        // FIX: Un-escape template literal
         logEvent(`[SCRIPT] Running from step ${index + 1}...`);
     }, [logEvent]);
 
@@ -176,7 +169,6 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
             failedTool?: LLMTool;
         }
     ) => {
-        // FIX: Un-escape template literal
         logEvent(`[SUPERVISOR] Anomaly detected. Initiating diagnostic protocol for error: ${errorContext.errorMessage}`);
         
         const diagnosticTool = allTools.find(t => t.name === 'Diagnose Tool Execution Error');
@@ -186,7 +178,6 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
         }
 
         try {
-            // FIX: Un-escape template literal
             const simplifiedHistory = swarmHistoryRef.current.map(h => 
                 `Tool: ${h.toolCall?.name || 'N/A'}, Args: ${JSON.stringify(h.toolCall?.arguments)}, Result: ` + (h.executionError ? `ERROR: ${h.executionError}` : 'OK')
             ).join('\n');
@@ -196,7 +187,6 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
             const diagnosticArgs = {
                 researchObjective: typeof currentUserTask.userRequest === 'string' ? currentUserTask.userRequest : currentUserTask.userRequest?.text || 'N/A',
                 executionHistory: simplifiedHistory,
-                // FIX: Un-escape template literals
                 failedAction: typeof errorContext.failedAction === 'string' 
                     ? `AI Generation Step with prompt: "${errorContext.failedAction}"` 
                     : `Tool Call: "${errorContext.failedAction.name}" with args: ${JSON.stringify(errorContext.failedAction.arguments)}`,
@@ -210,7 +200,6 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
             await executeActionRef.current({ name: 'Diagnose Tool Execution Error', arguments: diagnosticArgs }, 'supervisor');
             
         } catch (diagnosticError) {
-            // FIX: Un-escape template literal
             logEvent(`[SUPERVISOR] FATAL: The diagnostic agent itself failed. Error: ${diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError)}`);
         }
     }, [allTools, currentUserTask, executeActionRef, logEvent, selectedModel]);
@@ -242,7 +231,6 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
                     },
                 };
                 
-                // FIX: Un-escape template literal
                 logEvent(`[SCRIPT] Step ${currentScriptStepIndex + 1}/${script.length}: Executing '${toolCall.name}'`);
                 
                 const result = await executeActionRef.current!(toolCall, agent.id, currentUserTask.context);
@@ -256,7 +244,6 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
                         newStatuses[currentScriptStepIndex] = { status: 'error', error: result.executionError };
                         return newStatuses;
                     });
-                    // FIX: Un-escape template literal
                     logEvent(`[ERROR] 🛑 Halting script due to error in '${toolCall.name}'.`);
                     setScriptExecutionState('error');
                     await handleExecutionFailure({
@@ -293,10 +280,8 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
                      logEvent('🔎 Performing web search for additional context...');
                     try {
                         setApiCallCount(prev => ({ ...prev, [selectedModel.id]: (prev[selectedModel.id] || 0) + 1 }));
-                        // FIX: Un-escape template literal
                         const searchResult = await contextualizeWithSearch({ text: `Find technical data for this request: "${currentUserTask.userRequest.text}"`, files: currentUserTask.userRequest.files }, apiConfig, selectedModel);
                         if (searchResult.summary) {
-                            // FIX: Un-escape template literals
                             const sourceList = searchResult.sources.map(s => `- ${s.title}: ${s.uri}`).join('\n');
                             finalUserRequestText = `User request: "${currentUserTask.userRequest.text}"\n\nWeb Search Results:\n${searchResult.summary}\nSources:\n${sourceList}`;
                             logEvent(`✨ Search complete. Context appended. Sources:\n${sourceList}`);
@@ -315,7 +300,6 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
                     }
                 }
 
-                // FIX: Un-escape template literals
                 const historyString = swarmHistoryRef.current.length > 0
                     ? `Actions performed so far:\n${swarmHistoryRef.current.map(r =>
                         `Action: ${r.toolCall?.name || 'Unknown'} - Result: ${r.executionError
@@ -324,7 +308,6 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
                     ).join('\n')}`
                     : "No actions have been performed yet.";
 
-                // FIX: Un-escape template literals
                 const promptForAgent = `${contextualDataString}CURRENT GOAL: "${finalUserRequestText}"\n\n${historyString}\n\nBased on the provided BACKGROUND information, your CURRENT GOAL, and the actions performed so far, what is the next single action to perform to advance the research protocol? If the goal is complete, you must call "Task Complete".`;
                 
                 let toolsForAgent: LLMTool[] = [];
@@ -379,10 +362,8 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
                     const errorMessage = "The agent did not return a tool call. This may mean it is stuck or believes the task is complete without calling the 'Task Complete' tool.";
                     let detailedErrorMessage = errorMessage;
                     if (toolCallsResponse.text && toolCallsResponse.text.trim()) {
-                        // FIX: Un-escape template literal
                         detailedErrorMessage += ` The agent's response was: "${toolCallsResponse.text.trim()}"`;
                     }
-                    // FIX: Un-escape template literal
                     logEvent(`[SUPERVISOR] ${detailedErrorMessage}`);
                     await handleExecutionFailure({ failedAction: promptForAgent, errorMessage: detailedErrorMessage });
                     handleStopSwarm("Agent did not provide a next action.");
@@ -391,7 +372,6 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
             }
         } catch (err) {
             const errorMessage = err instanceof Error ? err.message : "Unknown error.";
-            // FIX: Un-escape template literal
             logEvent(`[ERROR] 🛑 Agent task failed: ${errorMessage}`);
             setScriptExecutionState('error');
             await handleExecutionFailure({
@@ -429,11 +409,9 @@ export const useSwarmManager = (props: UseSwarmManagerProps) => {
             swarmIterationCounter.current = 0;
             setCurrentScriptStepIndex(0);
             setStepStatuses(task.script ? Array(task.script.length).fill({ status: 'pending' }) : []);
-            // FIX: Un-escape template literal
             setEventLog(() => [`[${new Date().toLocaleTimeString()}] [INFO] 🚀 Starting task...`]);
             setActiveToolsForTask([]);
         } else {
-            // FIX: Un-escape template literal
             logEvent(`[INFO] ▶️ Resuming task...`);
             if (historyEventToInject) {
                 swarmHistoryRef.current.push(historyEventToInject);

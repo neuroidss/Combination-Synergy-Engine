@@ -30,6 +30,11 @@ export function useAppStateManager() {
     const [ollamaModels, setOllamaModels] = useState<AIModel[]>([]);
     const [ollamaState, setOllamaState] = useState<{ loading: boolean; error: string | null }>({ loading: false, error: null });
 
+    // --- NEW: Budgetary Guardian State ---
+    const [apiCallTimestamps, setApiCallTimestamps] = useState<number[]>([]);
+    const [isBudgetGuardTripped, setIsBudgetGuardTripped] = useState(false);
+
+
     const fetchOllamaModels = useCallback(async () => {
         setOllamaState({ loading: true, error: null });
         try {
@@ -201,5 +206,10 @@ export function useAppStateManager() {
         ollamaModels,
         ollamaState,
         fetchOllamaModels,
+        // Budgetary Guardian
+        apiCallTimestamps,
+        setApiCallTimestamps,
+        isBudgetGuardTripped,
+        setIsBudgetGuardTripped,
     };
 }

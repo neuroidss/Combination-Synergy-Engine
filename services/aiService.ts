@@ -8,6 +8,7 @@ import * as openAIService from './openAIService';
 import * as ollamaService from './ollamaService';
 import * as huggingFaceService from './huggingFaceService';
 import * as wllamaService from './wllamaService';
+import * as deepseekService from './deepseekService';
 
 export const processRequest = async (
     prompt: { text: string; files: { type: string, data: string }[] },
@@ -25,6 +26,13 @@ export const processRequest = async (
                 return await geminiService.generateWithTools(userInput, systemInstruction, model.id, apiConfig.googleAIAPIKey || '', relevantTools, files);
             case ModelProvider.OpenAI_API:
                  return await openAIService.generateWithTools(userInput, systemInstruction, model.id, apiConfig, relevantTools, files);
+            case ModelProvider.DeepSeek:
+                const deepSeekApiConfig: APIConfig = {
+                    ...apiConfig,
+                    openAIBaseUrl: 'https://api.studio.nebius.com/v1/', 
+                };
+                // The openAIService is already compatible with DeepSeek's requirements (no system role, etc.)
+                return await openAIService.generateWithTools(userInput, systemInstruction, model.id, deepSeekApiConfig, relevantTools, files, true);
             case ModelProvider.Ollama:
                 // Note: Ollama doesn't support multimodal input via this service yet.
                 return await ollamaService.generateWithTools(userInput, systemInstruction, model.id, apiConfig, relevantTools);
@@ -55,6 +63,8 @@ export const generateTextFromModel = async (
                 return await geminiService.generateText(userInput, systemInstruction, model.id, apiConfig.googleAIAPIKey || '', files);
             case ModelProvider.OpenAI_API:
                 return await openAIService.generateText(userInput, systemInstruction, model.id, apiConfig, files);
+            case ModelProvider.DeepSeek:
+                return await deepseekService.generateText(userInput, systemInstruction, model.id, apiConfig, files);
             case ModelProvider.Ollama:
                  return await ollamaService.generateText(userInput, systemInstruction, model.id, apiConfig, files);
             case ModelProvider.HuggingFace:

@@ -15,6 +15,14 @@ const getGeminiInstance = (apiKey: string): GoogleGenAI => {
     return geminiInstances.get(apiKey)!;
 };
 
+// Helper function to strip <think> blocks from model output
+const stripThinking = (text: string | null | undefined): string => {
+    if (!text) return "";
+    // This regex removes any <think>...</think> blocks and trims whitespace.
+    return text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+};
+
+
 // Helper function to identify Gemma models, which require a different approach for tool calling.
 const isGemmaModel = (modelId: string): boolean => modelId.startsWith('gemma-');
 
@@ -150,9 +158,10 @@ ${toolDescriptions}`;
         });
 
         // For Gemma, we can only rely on parsing the text response.
-        const toolCalls = parseToolCallFromText(response.text, toolNameMap);
+        const responseText = stripThinking(response.text);
+        const toolCalls = parseToolCallFromText(responseText, toolNameMap);
         
-        return { toolCalls, text: response.text };
+        return { toolCalls, text: responseText };
     }
 
     // --- GEMINI-SPECIFIC PATH (NATIVE TOOLING) ---
@@ -168,6 +177,8 @@ ${toolDescriptions}`;
             tools: [{ functionDeclarations: geminiTools }],
         }
     });
+    
+    const responseText = stripThinking(response.text);
 
     let toolCalls: AIToolCall[] | null = response.functionCalls?.map(fc => {
         const originalName = toolNameMap.get(fc.name) || fc.name;
@@ -197,16 +208,16 @@ ${toolDescriptions}`;
     }) || null;
 
     // --- FAULT TOLERANCE: FALLBACK LOGIC ---
-    if ((!toolCalls || toolCalls.length === 0) && response.text) {
+    if ((!toolCalls || toolCalls.length === 0) && responseText) {
         console.log("[Gemini Service] No native function call found. Attempting to parse from text content as a fallback.");
-        const parsedToolCalls = parseToolCallFromText(response.text, toolNameMap);
+        const parsedToolCalls = parseToolCallFromText(responseText, toolNameMap);
         if (parsedToolCalls) {
             console.log("[Gemini Service] ✅ Successfully parsed tool call from text via fallback.", parsedToolCalls);
             toolCalls = parsedToolCalls;
         }
     }
 
-    return { toolCalls, text: response.text };
+    return { toolCalls, text: responseText };
 };
 
 export const generateText = async (
@@ -227,7 +238,7 @@ export const generateText = async (
             model: modelId,
             contents: { parts: buildParts(fullPrompt, files), role: 'user' },
         });
-        return response.text;
+        return stripThinking(response.text);
     }
     
     // --- GEMINI-SPECIFIC PATH ---
@@ -237,7 +248,7 @@ export const generateText = async (
         config: { systemInstruction }
     });
 
-    return response.text;
+    return stripThinking(response.text);
 };
 
 export const contextualizeWithSearch = async (
@@ -254,9 +265,11 @@ export const contextualizeWithSearch = async (
         },
     });
 
+    const responseText = stripThinking(response.text);
     const groundingMetadata = response.candidates?.[0]?.groundingMetadata;
+    
     if (!groundingMetadata?.groundingChunks) {
-        return { summary: response.text, sources: [] };
+        return { summary: responseText, sources: [] };
     }
     
     const sources = groundingMetadata.groundingChunks
@@ -265,5 +278,5 @@ export const contextualizeWithSearch = async (
         .map((web: any) => ({ title: web.title || "Untitled", uri: web.uri }))
         .filter((source, index, self) => index === self.findIndex(s => s.uri === source.uri)); // Unique sources
 
-    return { summary: response.text, sources };
+    return { summary: responseText, sources };
 };

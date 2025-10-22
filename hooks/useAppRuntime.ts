@@ -11,6 +11,10 @@ import * as embeddingService from '../services/embeddingService';
 import { ModelProvider } from '../types';
 import type { AIToolCall, EnrichedAIResponse, LLMTool, MainView, ToolCreatorPayload, ExecuteActionFunction, SearchResult, AIModel } from '../types';
 
+// --- NEW: Budgetary Guardian Configuration ---
+const VELOCITY_LIMIT = 15; // Max calls
+const VELOCITY_WINDOW_SECONDS = 10; // Per X seconds
+
 // FIX: Changed from a const arrow function to a function declaration.
 // This helps TypeScript's type inference by hoisting the function, which can
 // resolve module dependency cycles that cause the hook's return type to be
@@ -30,7 +34,8 @@ export function useAppRuntime() {
         findRelevantTools,
         mainView: 'SYNERGY_FORGE',
         processRequest: (prompt, systemInstruction, agentId, relevantTools) => {
-             stateManager.setApiCallCount(prev => ({ ...prev, [stateManager.selectedModel.id]: (prev[stateManager.selectedModel.id] || 0) + 1 }));
+            checkApiCallVelocity(); // Guardian check
+            stateManager.setApiCallCount(prev => ({ ...prev, [stateManager.selectedModel.id]: (prev[stateManager.selectedModel.id] || 0) + 1 }));
             return aiService.processRequest(prompt, systemInstruction, agentId, relevantTools, stateManager.selectedModel, stateManager.apiConfig);
         },
         executeActionRef: executeActionRef,
@@ -38,6 +43,26 @@ export function useAppRuntime() {
         selectedModel: stateManager.selectedModel,
         apiConfig: stateManager.apiConfig,
     });
+    
+    // --- NEW: Budgetary Guardian Velocity Check ---
+    const checkApiCallVelocity = () => {
+        if (stateManager.isBudgetGuardTripped) {
+            throw new Error("Budgetary Guardian is active. All API calls are blocked.");
+        }
+        const now = Date.now();
+        const windowStart = now - (VELOCITY_WINDOW_SECONDS * 1000);
+        
+        const recentTimestamps = [...stateManager.apiCallTimestamps, now].filter(ts => ts > windowStart);
+        stateManager.setApiCallTimestamps(recentTimestamps);
+
+        if (recentTimestamps.length > VELOCITY_LIMIT) {
+            stateManager.logEvent(`[!!! BUDGET GUARDIAN !!!] 🛡️ High velocity detected: ${recentTimestamps.length} API calls in the last ${VELOCITY_WINDOW_SECONDS} seconds. Halting task to prevent runaway spending.`);
+            stateManager.setIsBudgetGuardTripped(true);
+            swarmManager.handleStopSwarm("Budgetary Guardian triggered by high API call velocity.", false);
+            throw new Error(`Budgetary Guardian triggered: High API call velocity detected.`);
+        }
+    };
+
 
     const getTool = useCallback((name: string): LLMTool | undefined => {
         return toolManager.allTools.find(t => t.name === name);
@@ -53,6 +78,8 @@ export function useAppRuntime() {
             selectedModel: stateManager.selectedModel,
             apiConfig: stateManager.apiConfig,
             allSources: stateManager.allSources,
+            liveFeed: stateManager.liveFeed,
+            eventLog: stateManager.eventLog,
             ModelProvider, // Expose the enum
         }),
         tools: {
@@ -98,15 +125,18 @@ export function useAppRuntime() {
         },
         ai: {
             generateText: (text: string, systemInstruction: string, files: { type: string, data: string }[] = []) => {
+                checkApiCallVelocity(); // Guardian check
                 stateManager.setApiCallCount(prev => ({ ...prev, [stateManager.selectedModel.id]: (prev[stateManager.selectedModel.id] || 0) + 1 }));
                 return aiService.generateTextFromModel({ text, files }, systemInstruction, stateManager.selectedModel, stateManager.apiConfig, stateManager.logEvent);
             },
             processRequest: (text: string, systemInstruction: string, tools: LLMTool[], files: { type: string, data: string }[] = [], modelOverride?: AIModel) => {
+                checkApiCallVelocity(); // Guardian check
                 const modelToUse = modelOverride || stateManager.selectedModel;
                 stateManager.setApiCallCount(prev => ({ ...prev, [modelToUse.id]: (prev[modelToUse.id] || 0) + 1 }));
                 return aiService.processRequest({ text, files }, systemInstruction, 'tool-runtime', tools, modelToUse, stateManager.apiConfig);
             },
             search: (text: string) => {
+                 checkApiCallVelocity(); // Guardian check
                  stateManager.setApiCallCount(prev => ({ ...prev, [stateManager.selectedModel.id]: (prev[stateManager.selectedModel.id] || 0) + 1 }));
                  return aiService.contextualizeWithSearch({text, files: []}, stateManager.apiConfig, stateManager.selectedModel);
             },

@@ -1,33 +1,41 @@
 // services/cacheService.ts
 import { openDB, type IDBPDatabase, type DBSchema } from 'https://esm.sh/idb@8';
 
-const DB_NAME = 'singularity-agent-cache';
+const DB_NAME = 'synergy-forge-atlas';
 const DB_VERSION = 1;
-const MCP_CACHE_STORE = 'mcp_cache';
-const ASSET_CACHE_STORE = 'asset_cache';
+const DOSSIER_STORE = 'dossiers';
+const SOURCE_STORE = 'sources';
+const VECTOR_STORE = 'vectors';
 
-interface CacheDBSchema extends DBSchema {
-  [MCP_CACHE_STORE]: {
-    key: string;
-    value: { result: any; timestamp: number };
+interface AtlasDBSchema extends DBSchema {
+  [DOSSIER_STORE]: {
+    key: string; // e.g., 'dossier-MET+RAPA'
+    value: any; // The full dossier object
   };
-  [ASSET_CACHE_STORE]: {
-    key: string;
-    value: { blob: Blob; timestamp: number };
+  [SOURCE_STORE]: {
+    key: string; // The canonical URL of the source
+    value: any; // The full source object, including textContent
+  };
+   [VECTOR_STORE]: {
+    key: string; // e.g., 'vector-db'
+    value: any; // The entire vector DB array
   };
 }
 
-let dbPromise: Promise<IDBPDatabase<CacheDBSchema>> | null = null;
+let dbPromise: Promise<IDBPDatabase<AtlasDBSchema>> | null = null;
 
 const initDB = () => {
   if (!dbPromise) {
-    dbPromise = openDB<CacheDBSchema>(DB_NAME, DB_VERSION, {
+    dbPromise = openDB<AtlasDBSchema>(DB_NAME, DB_VERSION, {
       upgrade(db) {
-        if (!db.objectStoreNames.contains(MCP_CACHE_STORE)) {
-          db.createObjectStore(MCP_CACHE_STORE);
+        if (!db.objectStoreNames.contains(DOSSIER_STORE)) {
+          db.createObjectStore(DOSSIER_STORE);
         }
-        if (!db.objectStoreNames.contains(ASSET_CACHE_STORE)) {
-          db.createObjectStore(ASSET_CACHE_STORE);
+        if (!db.objectStoreNames.contains(SOURCE_STORE)) {
+          db.createObjectStore(SOURCE_STORE);
+        }
+        if (!db.objectStoreNames.contains(VECTOR_STORE)) {
+          db.createObjectStore(VECTOR_STORE);
         }
       },
     });
@@ -35,57 +43,46 @@ const initDB = () => {
   return dbPromise;
 };
 
-// --- MCP (Server Tool Call) Cache ---
+// --- General Purpose Key-Value Store ---
 
-export const getMcpCache = async (key: string): Promise<any | null> => {
+export const getCache = async (storeName: 'dossiers' | 'sources' | 'vectors', key: string): Promise<any | null> => {
   try {
     const db = await initDB();
-    const entry = await db.get(MCP_CACHE_STORE, key);
-    return entry ? entry.result : null;
+    const entry = await db.get(storeName, key);
+    return entry ? entry : null;
   } catch (error) {
-    console.error("Failed to get from MCP cache:", error);
+    console.error(`Failed to get from '${storeName}' cache:`, error);
     return null;
   }
 };
 
-export const setMcpCache = async (key: string, result: any): Promise<void> => {
+export const setCache = async (storeName: 'dossiers' | 'sources' | 'vectors', key: string, value: any): Promise<void> => {
   try {
     const db = await initDB();
-    await db.put(MCP_CACHE_STORE, { result, timestamp: Date.now() }, key);
+    await db.put(storeName, value, key);
   } catch (error) {
-    console.error("Failed to set in MCP cache:", error);
+    console.error(`Failed to set in '${storeName}' cache:`, error);
   }
 };
 
-// --- Asset (SVG/GLB) Cache ---
-
-export const getAssetBlob = async (url: string): Promise<Blob | null> => {
-  try {
-    const db = await initDB();
-    const entry = await db.get(ASSET_CACHE_STORE, url);
-    return entry ? entry.blob : null;
-  } catch (error) {
-    console.error(`Failed to get asset from cache (${url}):`, error);
-    return null;
-  }
-};
-
-export const setAssetBlob = async (url: string, blob: Blob): Promise<void> => {
-  try {
-    const db = await initDB();
-    await db.put(ASSET_CACHE_STORE, { blob, timestamp: Date.now() }, url);
-  } catch (error) {
-    console.error(`Failed to set asset in cache (${url}):`, error);
-  }
-};
+export const getAllFromCache = async (storeName: 'dossiers' | 'sources' | 'vectors'): Promise<any[]> => {
+    try {
+        const db = await initDB();
+        return await db.getAll(storeName);
+    } catch (error) {
+        console.error(`Failed to get all from '${storeName}' cache:`, error);
+        return [];
+    }
+}
 
 export const clearAllCaches = async () => {
     try {
         const db = await initDB();
-        await db.clear(MCP_CACHE_STORE);
-        await db.clear(ASSET_CACHE_STORE);
-        console.log("All caches cleared.");
+        await db.clear(DOSSIER_STORE);
+        await db.clear(SOURCE_STORE);
+        await db.clear(VECTOR_STORE);
+        console.log("All IndexedDB caches cleared.");
     } catch (error) {
-        console.error("Failed to clear caches:", error);
+        console.error("Failed to clear IndexedDB caches:", error);
     }
 }

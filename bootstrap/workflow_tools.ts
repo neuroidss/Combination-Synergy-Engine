@@ -2,6 +2,195 @@ import type { ToolCreatorPayload } from '../types';
 
 export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
     {
+        name: 'GenerateCommercializationOutlook',
+        description: 'Executes a full commercial analysis for a synergy, covering target indication, market size, and IP strategy.',
+        category: 'Automation',
+        executionEnvironment: 'Client',
+        purpose: 'To orchestrate multiple analysis tools to build a comprehensive, investment-focused commercial outlook for a scientific hypothesis.',
+        parameters: [
+            { name: 'synergyData', type: 'object', description: 'The full synergy object, including combination, summary, and MoA justification.', required: true }
+        ],
+        implementationCode: `
+            const { synergyData } = args;
+            runtime.logEvent('[Commercial] Starting commercialization outlook analysis...');
+
+            // 1. Find best indication
+            const indicationsResult = await runtime.tools.run('FindPotentialIndications', { 
+                synergySummary: synergyData.summary,
+                combination: synergyData.combination 
+            });
+            const targetIndication = indicationsResult.indications[0]; // Pick the top one
+            runtime.logEvent(\`[Commercial] Identified Target Indication: \${targetIndication.indication}\`);
+
+            // 2. Get market data for that indication
+            const marketDataResult = await runtime.tools.run('AnalyzeMarketData', { indication: targetIndication.indication });
+            runtime.logEvent(\`[Commercial] Market Size (TAM): \${marketDataResult.marketData.tam}\`);
+
+            // 3. NEW STEP: Get competitor data
+            const competitorsResult = await runtime.tools.run('AnalyzeCompetitors', { indication: targetIndication.indication });
+            runtime.logEvent(\`[Commercial] Identified Competitors: \${(competitorsResult.competitors || []).join(', ')}\`);
+
+            // Add competitors to market data
+            const marketDataWithCompetitors = {
+                ...marketDataResult.marketData,
+                competitors: competitorsResult.competitors || [],
+            };
+
+            // 4. Propose IP strategy
+            const ipStrategyResult = await runtime.tools.run('ProposeIntellectualPropertyStrategy', { 
+                components: synergyData.combination,
+                indication: targetIndication.indication
+            });
+            runtime.logEvent(\`[Commercial] Proposed IP Strategy: \${ipStrategyResult.strategies[0].type}\`);
+
+            // 5. Determine Regulatory Pathway
+            const regulatoryPrompt = \`A therapeutic combines these components: \${synergyData.combination.map(c=>c.name).join(', ')} to treat '\${targetIndication.indication}'. What is the most likely US FDA regulatory pathway (e.g., 505(b)(2) NDA, IND, Medical Food)? Respond with JSON: {"pathway": "...", "justification": "..."}\`;
+            const regulatorySystemInstruction = "You are a regulatory affairs expert. Respond ONLY with a valid JSON object.";
+            const regulatoryResponseText = await runtime.ai.generateText(regulatoryPrompt, regulatorySystemInstruction);
+            const regulatoryJsonMatch = regulatoryResponseText.match(/\\{[\\s\\S]*\\}/);
+            const regulatoryData = regulatoryJsonMatch ? JSON.parse(regulatoryJsonMatch[0]) : { pathway: "Unknown", justification: "AI failed to determine pathway." };
+            runtime.logEvent(\`[Commercial] Determined Regulatory Pathway: \${regulatoryData.pathway}\`);
+
+            // 6. Assemble and return the final outlook object
+            const finalOutlook = {
+                targetIndication: targetIndication.indication,
+                indicationJustification: targetIndication.justification,
+                marketData: marketDataWithCompetitors,
+                ipStrategy: ipStrategyResult.strategies[0],
+                regulatoryPathway: regulatoryData,
+            };
+
+            return { success: true, commercializationOutlook: finalOutlook };
+        `
+    },
+    {
+        name: "SentinelAgentPeriodicCheck",
+        description: "A background workflow that acts as a 'Sentinel'. It periodically searches for new, high-impact scientific literature related to already discovered synergies and triggers a re-evaluation if necessary.",
+        category: "Automation",
+        executionEnvironment: "Client",
+        purpose: "To ensure the 'Living Atlas' of knowledge remains up-to-date by proactively monitoring for new scientific findings that could alter previous conclusions.",
+        parameters: [
+             { name: 'allDossiers', type: 'array', description: 'The complete list of all currently stored dossiers.', required: true },
+             { name: 'allSources', type: 'array', description: 'The complete list of all validated sources.', required: true },
+        ],
+        implementationCode: `
+            const { allDossiers, allSources } = args;
+            runtime.logEvent('[Sentinel] 🛡️ Awakening... Scanning for new, high-impact research.');
+
+            if (!allDossiers || allDossiers.length === 0) {
+                runtime.logEvent('[Sentinel] No existing dossiers to monitor. Sleeping.');
+                return { success: true, message: "No dossiers to monitor." };
+            }
+
+            // 1. Gather keywords from existing high-value synergies
+            const keywords = new Set();
+            allDossiers.forEach(d => {
+                (d.data.synergyData.combination || []).forEach(c => keywords.add(c.name));
+            });
+            const keywordArray = Array.from(keywords);
+            
+            if (keywordArray.length === 0) {
+                 runtime.logEvent('[Sentinel] No keywords to search for. Sleeping.');
+                 return { success: true, message: "No keywords." };
+            }
+
+            // 2. Search for new literature published this year
+            const currentYear = new Date().getFullYear();
+            const searchQuery = keywordArray.slice(0, 5).join(' OR '); // Limit query length
+            const searchResult = await runtime.tools.run('Federated Scientific Search', { 
+                query: searchQuery, 
+                maxResultsPerSource: 5, 
+                sinceYear: currentYear 
+            });
+
+            const newSources = searchResult.searchResults || [];
+            const existingSourceUris = new Set(allSources.map(s => s.uri));
+            const trulyNewSources = newSources.filter(s => !existingSourceUris.has(s.link));
+
+            if (trulyNewSources.length === 0) {
+                runtime.logEvent('[Sentinel] No new relevant articles found. Atlas is current.');
+                return { success: true, message: "No new articles found." };
+            }
+            runtime.logEvent(\`[Sentinel] Found \${trulyNewSources.length} potentially new articles. Assessing impact...\`);
+            
+            // 3. Assess impact and trigger re-evaluation
+            let reevaluationsTriggered = 0;
+            for (const newSource of trulyNewSources) {
+                const validatedSource = await runtime.tools.run('Find and Validate Single Source', { searchResult: newSource, researchObjective: "Assess impact on longevity knowledge base" });
+                
+                const impactResult = await runtime.tools.run('AssessSourceImpact', { source: validatedSource.validatedSource, existingKeywords: keywordArray });
+
+                if (impactResult.impact === 'HIGH_IMPACT') {
+                    runtime.logEvent(\`[Sentinel] 🔥 HIGH IMPACT source found: "\${validatedSource.validatedSource.title}". Triggering re-evaluation for related dossiers.\`);
+                    // Find dossiers related to this new source
+                    const relatedDossiers = allDossiers.filter(d => 
+                        keywordArray.some(k => validatedSource.validatedSource.summary.toLowerCase().includes(k.toLowerCase()))
+                    );
+
+                    for (const dossier of relatedDossiers) {
+                        await runtime.tools.run('ExecuteReevaluationProtocol', {
+                            staleDossier: dossier,
+                            triggeringSource: validatedSource.validatedSource,
+                            allSources: allSources
+                        });
+                        reevaluationsTriggered++;
+                    }
+                }
+            }
+
+            const finalMessage = \`Sentinel scan complete. Found \${trulyNewSources.length} new sources, triggered \${reevaluationsTriggered} re-evaluations.\`;
+            runtime.logEvent(\`[Sentinel] ✅ \${finalMessage}\`);
+            return { success: true, message: finalMessage };
+        `
+    },
+     {
+        name: "ExecuteReevaluationProtocol",
+        description: "The core re-evaluation workflow. Takes a 'stale' dossier and a new 'triggering' source, re-runs the full risk analysis, compares the new result with the old, and records the updated, versioned dossier with a changelog.",
+        category: "Automation",
+        executionEnvironment: "Client",
+        purpose: "To maintain the integrity and accuracy of the 'Living Atlas' by systematically updating knowledge based on new, high-impact evidence.",
+        parameters: [
+            { name: 'staleDossier', type: 'object', description: 'The old dossier object that needs re-evaluation.', required: true },
+            { name: 'triggeringSource', type: 'object', description: 'The new, high-impact source that prompted this re-evaluation.', required: true },
+            { name: 'allSources', type: 'array', description: 'The complete list of all validated sources to provide full context.', required: true },
+        ],
+        implementationCode: `
+            const { staleDossier, triggeringSource, allSources } = args;
+            const comboString = staleDossier.data.synergyData.combination.map(c => c.name).join(' + ');
+            runtime.logEvent(\`[Re-evaluation] 🔄 Starting re-evaluation for \${comboString} based on new source: "\${triggeringSource.title.substring(0,40)}..."\`);
+            
+            // 1. Re-run the dossier generation with the new source included in the context
+            const newDossierResult = await runtime.tools.run('GenerateRiskEngineeringDossier', {
+                synergy: staleDossier.data.synergyData,
+                backgroundSources: [...allSources, triggeringSource]
+            });
+            const newDossier = newDossierResult.dossier;
+
+            // 2. Compare the old and new dossiers to generate a changelog
+            const comparisonResult = await runtime.tools.run('CompareRiskDossiers', {
+                oldDossier: staleDossier.data,
+                newDossier: newDossier,
+                triggeringSource: triggeringSource
+            });
+            const changelog = comparisonResult.changelog || ["Re-evaluated with new data."];
+            
+            // 3. Assemble and record the new, versioned dossier
+            const oldVersion = staleDossier.data.version || 1;
+            const oldHistory = staleDossier.data.history || [\`v1.0: Initial dossier generated on \${new Date(staleDossier.data.updatedAt).toLocaleDateString()}.\`];
+
+            const newHistoryEntry = \`v\${oldVersion + 1}.0 (\${new Date().toLocaleDateString()}): \${changelog.join(' ')}\`;
+            
+            const recordResult = await runtime.tools.run('RecordTrialDossier', {
+                ...newDossier,
+                version: oldVersion + 1,
+                history: [...oldHistory, newHistoryEntry]
+            });
+
+            runtime.logEvent(\`[Re-evaluation] ✅ \${comboString} updated to v\${oldVersion + 1}.0 and recorded.\`);
+            return recordResult;
+        `
+    },
+    {
         name: "UpdatePricingModel",
         description: "A meta-workflow that updates the 'FindMarketPriceForLabItem' tool. It searches for new lab supply vendors, then rewrites the tool's code to include these new vendors as fallback search options, making the price search more robust.",
         category: "Automation",
@@ -288,7 +477,7 @@ export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
         const refineResult = await runtime.tools.run('Refine Search Queries', { researchObjective });
         const refinedQueryString = refineResult.queries.join('; ');
 
-        // Step 2: Deep Federated Search
+        // Step 2: Deep Federated Search with Self-Healing
         runtime.logEvent('[Workflow] Step 2: Performing deep search for *new* literature...');
         let proxyUrl = null;
         if (runtime.isServerConnected()) {
@@ -300,44 +489,56 @@ export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
             }
         }
         
-        const searchResult = await runtime.tools.run('Federated Scientific Search', { query: refinedQueryString, maxResultsPerSource: 20, proxyUrl });
+        let searchResult = await runtime.tools.run('Federated Scientific Search', { query: refinedQueryString, maxResultsPerSource: 20, proxyUrl });
         let initialSearchResults = searchResult.searchResults || [];
         
-        // -- INTELLIGENT CONTINUATION: Filter out already processed sources --
+        // Check if search failed completely
+        if (initialSearchResults.length === 0) {
+            // A. Check for network errors in the log
+            const recentLogs = runtime.getState().eventLog.slice(-50); // check last 50 logs
+            const hasFetchError = recentLogs.some(log => log.includes('[Fetch] WARN') || log.includes('All direct and proxy fetch attempts failed'));
+        
+            if (hasFetchError) {
+                runtime.logEvent('[Workflow] Search returned no results and network errors were detected. Engaging fetch adaptation protocol...');
+                try {
+                    await runtime.tools.run('AdaptFetchStrategy', {});
+                    runtime.logEvent('[Workflow] Fetch strategy adapted. Retrying search with original queries...');
+                    // Retry the original search
+                    searchResult = await runtime.tools.run('Federated Scientific Search', { query: refinedQueryString, maxResultsPerSource: 20, proxyUrl });
+                    initialSearchResults = searchResult.searchResults || [];
+                } catch (adaptError) {
+                    runtime.logEvent(\`[Workflow] ⚠️ Fetch adaptation failed: \${adaptError.message}. Proceeding with diagnostic query retry as fallback.\`);
+                }
+            }
+            
+            // B. If still no results (either adaptation didn't work, wasn't triggered, or also failed), use query diagnosis.
+            if (initialSearchResults.length === 0) {
+                runtime.logEvent('[Workflow] Initial search (and potential adaptation) yielded no results. Engaging diagnostic query retry...');
+                const retrySearchResult = await runtime.tools.run('Diagnose and Retry Search', { originalQuery: refinedQueryString, researchObjective, reasonForFailure: 'The initial refined queries returned zero results.', proxyUrl });
+                initialSearchResults = retrySearchResult.searchResults || [];
+            }
+        }
+        
+        // C. Final check and filter for new results
         const newSearchResults = initialSearchResults.filter(result => {
             const canonicalUrl = runtime.search.buildCanonicalUrl(result.link);
             return canonicalUrl && !existingSourceUris.has(canonicalUrl);
         });
         
         runtime.logEvent(\`[Workflow] Search found \${initialSearchResults.length} total results. \${newSearchResults.length} are new and will be processed.\`);
-
-        if (newSearchResults.length === 0 && initialSearchResults.length > 0) {
-            runtime.logEvent('[Workflow] No new articles found matching the query. Analysis will proceed with existing data.');
-        }
-
-        if (newSearchResults.length === 0 && initialSearchResults.length === 0) {
-            runtime.logEvent('[Workflow] Initial search failed. Engaging diagnostic retry...');
-            const retrySearchResult = await runtime.tools.run('Diagnose and Retry Search', { originalQuery: refinedQueryString, researchObjective, reasonForFailure: 'The initial refined queries returned zero results.', proxyUrl });
-            const retryResults = retrySearchResult.searchResults || [];
-            
-            // Also filter the retry results
-            const newRetryResults = retryResults.filter(result => {
-                const canonicalUrl = runtime.search.buildCanonicalUrl(result.link);
-                return canonicalUrl && !existingSourceUris.has(canonicalUrl);
-            });
-            
-            if (newRetryResults.length === 0) {
-                 throw new Error("Workflow failed at Step 2: Search returned no new results, even after retry.");
+        
+        if (newSearchResults.length === 0) {
+            if (initialSearchResults.length > 0) {
+                runtime.logEvent('[Workflow] No *new* articles found matching the query. Analysis complete for this objective.');
+            } else {
+                // If we are here, it means initial search, adaptation, and query retry ALL failed to find anything. This is a fatal error.
+                throw new Error("Workflow failed at Step 2: Search returned no results, even after adaptation and query retry.");
             }
-            initialSearchResults = newRetryResults; // Use the deduplicated retry results
-        } else {
-            initialSearchResults = newSearchResults; // Use the deduplicated initial results
         }
-
 
         // Step 3: Rank New Search Results
-        runtime.logEvent(\`[Workflow] Step 3: Ranking \${initialSearchResults.length} new sources...\`);
-        const rankResult = await runtime.tools.run('Rank Search Results', { searchResults: initialSearchResults, researchObjective });
+        runtime.logEvent(\`[Workflow] Step 3: Ranking \${newSearchResults.length} new sources...\`);
+        const rankResult = await runtime.tools.run('Rank Search Results', { searchResults: newSearchResults, researchObjective });
         const rankedSearchResults = rankResult.rankedResults;
         
         // Step 4: Iterative Processing of New Sources
@@ -374,7 +575,7 @@ export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
 
                     if (bestSynergyFromSource.trialPriorityScore > 85 && dossiersGenerated < 5) { // High threshold and limit dossiers
                         runtime.logEvent(\`[Workflow] -> ⭐ Exceptional synergy found! Generating dossier immediately...\`);
-                        await runtime.tools.run('Generate Proposal for Single Synergy', { 
+                        await runtime.tools.run('GenerateRiskEngineeringDossier', { 
                             synergy: bestSynergyFromSource, 
                             backgroundSources: [...existingSources, ...newlyValidatedSources]
                         });
@@ -386,15 +587,33 @@ export const WORKFLOW_TOOLS: ToolCreatorPayload[] = [
             }
         }
         
-        const totalValidatedSources = existingSources.length + newlyValidatedSources.length;
-        if (totalValidatedSources === 0) {
-            throw new Error("Workflow failed: No reliable sources could be validated from the search results.");
-        }
-        if (allFoundSynergies.length === 0 && newlyValidatedSources.length > 0) {
-             runtime.logEvent("[Workflow] ⚠️ WARNING: Analysis of new sources complete, but no new synergies were found.");
+        // Step 5: Final Ranking and Critique of Top Proposals
+        runtime.logEvent(\`[Workflow] Step 5: All new sources processed. Critiquing top generated proposals...\`);
+        
+        const allDossiers = runtime.getState().liveFeed.filter(item => item.type === 'dossier');
+        
+        if (allDossiers.length > 0) {
+            const rankedDossiers = allDossiers.sort((a,b) => (b.data.synergyData.trialPriorityScore || 0) - (a.data.synergyData.trialPriorityScore || 0));
+            const topDossiersToCritique = rankedDossiers.slice(0, 2); // Critique the top 2
+
+            runtime.logEvent(\`[Workflow] Found \${topDossiersToCritique.length} top dossiers to critique.\`);
+
+            for (const dossier of topDossiersToCritique) {
+                try {
+                    await runtime.tools.run('CritiqueInvestmentProposal', {
+                        dossier: dossier.data,
+                        backgroundSources: [...existingSources, ...newlyValidatedSources]
+                    });
+                } catch (e) {
+                    runtime.logEvent(\`[Workflow] -> ⚠️ Critique failed for dossier on '\${dossier.data.synergyData.combination.map(c=>c.name).join(' + ')}': \${e.message}\`);
+                }
+            }
+        } else {
+             runtime.logEvent('[Workflow] No dossiers were generated in this run to critique.');
         }
 
-        const finalSummary = \`Workflow completed. Processed \${rankedSearchResults.length} new sources, validated \${newlyValidatedSources.length}, and found \${allFoundSynergies.length} new potential synergies. Total knowledge base now contains \${totalValidatedSources} sources.\`;
+        const totalValidatedSources = existingSources.length + newlyValidatedSources.length;
+        const finalSummary = \`Workflow completed. Processed \${rankedSearchResults.length} new sources, validated \${newlyValidatedSources.length}, found \${allFoundSynergies.length} new synergies, and critiqued top proposals.\`;
         runtime.logEvent(\`[Workflow] ✅ \${finalSummary}\`);
         return { success: true, message: "Workflow finished successfully.", summary: finalSummary };
     `
@@ -533,33 +752,45 @@ app.post('/browse', async (req, res) => {
         return res.status(400).send('URL is required.');
     }
     console.log('[Web Proxy] Fetching URL: ' + url);
-    try {
-        const userAgent = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
-        const response = await fetch(url, {
-            headers: {
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'User-Agent': userAgent,
-                'Sec-Ch-Ua': '"Not/A)Brand";v="99", "Google Chrome";v="127", "Chromium";v="127"',
-                'Sec-Ch-Ua-Mobile': '?0',
-                'Sec-Ch-Ua-Platform': '"Windows"',
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'cross-site',
-                'Upgrade-Insecure-Requests': '1',
-            }
-        });
-        
-        const body = await response.text();
-        const contentType = response.headers.get('content-type') || 'text/plain';
-        
-        res.setHeader('Content-Type', contentType);
-        res.status(response.status).send(body);
+    
+    // NEW: Retry logic
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+            const userAgent = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+            const response = await fetch(url, {
+                signal: AbortSignal.timeout(10000), // 10 second timeout per attempt
+                headers: {
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'User-Agent': userAgent,
+                    'Referer': 'https://www.google.com/', // Change referer to look less suspicious
+                    'Sec-Ch-Ua': '"Not/A)Brand";v="99", "Google Chrome";v="127", "Chromium";v="127"',
+                    'Sec-Ch-Ua-Mobile': '?0',
+                    'Sec-Ch-Ua-Platform': '"Windows"',
+                    'Sec-Fetch-Dest': 'document',
+                    'Sec-Fetch-Mode': 'navigate',
+                    'Sec-Fetch-Site': 'cross-site',
+                    'Upgrade-Insecure-Requests': '1',
+                }
+            });
+            
+            const body = await response.text();
+            const contentType = response.headers.get('content-type') || 'text/plain';
+            
+            res.setHeader('Content-Type', contentType);
+            res.status(response.status).send(body);
+            return; // Success, exit the loop and function
 
-    } catch (e) {
-        const error = e as Error;
-        console.error('[Web Proxy] Failed to browse URL ' + url + ': ' + error.message);
-        res.status(500).json({ error: 'Failed to retrieve or process content from URL. Reason: ' + error.message });
+        } catch (e) {
+            const error = e as Error;
+            console.error(\\\`[Web Proxy] Attempt \\\${attempt} failed for \\\${url}: \\\${error.message}\\\`);
+            if (attempt === 3) {
+                // Last attempt failed, send error response
+                res.status(500).json({ error: 'Failed to retrieve or process content from URL. Reason: ' + error.message });
+            } else {
+                await new Promise(resolve => setTimeout(resolve, 500)); // Wait before retrying
+            }
+        }
     }
 });
 

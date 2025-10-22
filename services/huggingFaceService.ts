@@ -109,7 +109,7 @@ const executePipe = async (pipe: TextGenerationPipeline, system: string, user:st
         throw new Error("Could not extract assistant's response from model output.");
     }
     
-    return assistantResponse;
+    return assistantResponse.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
 };
 
 const generateDetailedError = (error: unknown, repoId: string, rawResponse?: string): Error => {
