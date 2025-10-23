@@ -6,7 +6,13 @@ SynergyForge is a browser-first platform for an **AI agent capable of autonomous
 
 The core of the platform is a discovery engine that goes beyond simple search. It builds a real-time, financially-oriented **Intervention Knowledge Space** to identify unexplored connections between research areas and generate novel, testable, and cost-analyzed investment opportunities.
 
-![SynergyForge Discovery Map and Hypothesis Generation](https://github.com/neuroidss/Combination-Synergy-Engine/blob/main/Screenshot%20from%202025-10-12%2018-22-52.png?raw=true)
+![SynergyForge Discovery Map and Hypothesis Generation](https://github.com/neuroidss/Combination-Synergy-Engine/blob/main/Screenshot%20from%202025-10-23%2009-05-20.png?raw=true)
+![SynergyForge Discovery Map and Hypothesis Generation](https://github.com/neuroidss/Combination-Synergy-Engine/blob/main/Screenshot%20from%202025-10-23%2009-05-39.png?raw=true)
+![SynergyForge Discovery Map and Hypothesis Generation](https://github.com/neuroidss/Combination-Synergy-Engine/blob/main/Screenshot%20from%202025-10-23%2009-05-45.png?raw=true)
+![SynergyForge Discovery Map and Hypothesis Generation](https://github.com/neuroidss/Combination-Synergy-Engine/blob/main/Screenshot%20from%202025-10-23%2009-05-51.png?raw=true)
+![SynergyForge Discovery Map and Hypothesis Generation](https://github.com/neuroidss/Combination-Synergy-Engine/blob/main/Screenshot%20from%202025-10-23%2009-05-56.png?raw=true)
+![SynergyForge Discovery Map and Hypothesis Generation](https://github.com/neuroidss/Combination-Synergy-Engine/blob/main/Screenshot%20from%202025-10-23%2009-06-01.png?raw=true)
+![SynergyForge Discovery Map and Hypothesis Generation](https://github.com/neuroidss/Combination-Synergy-Engine/blob/main/Screenshot%20from%202025-10-23%2009-06-08.png?raw=true)
 
 ## The Discovery Engine: Finding What's Next
 
